@@ -9,6 +9,8 @@ export type AppRecord = {
   slug: string;
   name: string;
   projectId: string;
+  /** False when the owner supplied an existing project. Such projects are never deleted by the tool. */
+  createdByPlatform: boolean;
   folder: string;
   port: number;
   repoUrl: string | null;

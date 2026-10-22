@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { nextFreePort, type AppRecord } from "../src/registry";
-import { isValidSlug, toSlug } from "../src/slug";
+import { assertAppwriteId, isValidSlug, toSlug } from "../src/slug";
 
 describe("toSlug", () => {
   test("lowercases and joins words with hyphens", () => {
@@ -39,5 +39,14 @@ describe("nextFreePort", () => {
     expect(nextFreePort([])).toBe(3101);
     expect(nextFreePort([app(3101), app(3102)])).toBe(3103);
     expect(nextFreePort([app(3102)])).toBe(3101);
+  });
+});
+
+describe("assertAppwriteId", () => {
+  test("accepts Appwrite ids and rejects path tricks", () => {
+    expect(assertAppwriteId("todo-list")).toBe("todo-list");
+    expect(() => assertAppwriteId("../teams")).toThrow();
+    expect(() => assertAppwriteId("a/b")).toThrow();
+    expect(() => assertAppwriteId("x".repeat(37))).toThrow();
   });
 });

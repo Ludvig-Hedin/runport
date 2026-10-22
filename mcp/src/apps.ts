@@ -5,7 +5,7 @@ import { config } from "./config";
 import { run, succeeds } from "./exec";
 import { createPrivateRepo } from "./github";
 import { type AppRecord, loadRegistry, nextFreePort, removeApp, upsertApp } from "./registry";
-import { toSlug } from "./slug";
+import { assertAppwriteId, toSlug } from "./slug";
 
 // Every step checks whether its result already exists, so calling create_app
 // again after a failure resumes where it stopped instead of duplicating.
@@ -38,6 +38,9 @@ async function readEnv(file: string): Promise<Record<string, string>> {
 }
 
 async function writeEnv(file: string, values: Record<string, string>): Promise<void> {
+  for (const [key, value] of Object.entries(values)) {
+    if (!/^[A-Z0-9_]+$/.test(key) || /[\r\n\0]/.test(value)) throw new Error(`Refusing to write unsafe value for ${key} to .env.local.`);
+  }
   const body = Object.entries(values)
     .map(([k, v]) => `${k}=${v}`)
     .join("\n");
@@ -94,7 +97,11 @@ export async function createApp(input: CreateAppInput): Promise<CreateAppResult>
   const known = registry.apps.find((a) => a.slug === slug);
   const port = known?.port ?? nextFreePort(registry.apps);
   const folder = known?.folder ?? join(config.appsDir, slug);
-  const projectId = input.projectId ?? known?.projectId ?? slug;
+  const projectId = assertAppwriteId(input.projectId ?? known?.projectId ?? slug);
+  const owner = registry.apps.find((a) => a.projectId === projectId && a.slug !== slug);
+  if (owner) throw new Error(`Project ${projectId} already belongs to app "${owner.slug}".`);
+  if (input.apiKey && !/^[A-Za-z0-9_.-]+$/.test(input.apiKey)) throw new Error("That server key has unexpected characters.");
+  let createdByPlatform = known?.createdByPlatform ?? !input.projectId;
 
   if (input.projectId) {
     steps.push(`using existing project ${projectId}`);
@@ -102,6 +109,7 @@ export async function createApp(input: CreateAppInput): Promise<CreateAppResult>
     steps.push(`project ${projectId} already exists`);
   } else {
     await admin.createProject(projectId, input.name);
+    createdByPlatform = true;
     steps.push(`created project ${projectId}`);
   }
 
@@ -143,6 +151,7 @@ export async function createApp(input: CreateAppInput): Promise<CreateAppResult>
     slug,
     name: input.name,
     projectId,
+    createdByPlatform,
     folder,
     port,
     repoUrl,
@@ -172,7 +181,9 @@ export async function deleteApp(slug: string, confirm: string): Promise<DeleteRe
   const notes: string[] = [];
 
   let projectDeleted = false;
-  if (await admin.getProject(app.projectId)) {
+  if (!app.createdByPlatform) {
+    notes.push(`Kept Appwrite project ${app.projectId}: it existed before the platform used it.`);
+  } else if (await admin.getProject(app.projectId)) {
     await admin.deleteProject(app.projectId);
     projectDeleted = true;
   }

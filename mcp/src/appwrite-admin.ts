@@ -1,5 +1,9 @@
 import { APP_KEY_SCOPES, config } from "./config";
 import { readSecret } from "./keychain";
+import { assertAppwriteId } from "./slug";
+
+/** Validated and URL-encoded project id for use inside a route path. */
+const seg = (projectId: string) => encodeURIComponent(assertAppwriteId(projectId));
 
 // Talks to Appwrite's console API as the owner, the same way the admin screen
 // does. Appwrite 1.x and 2.x expose project admin under different routes, so
@@ -96,8 +100,8 @@ export class AppwriteAdmin {
   async getProject(projectId: string): Promise<{ $id: string; name: string } | null> {
     try {
       return await this.first([
-        { method: "GET", path: `/projects/${projectId}` },
-        { method: "GET", path: `/organization/projects/${projectId}` },
+        { method: "GET", path: `/projects/${seg(projectId)}` },
+        { method: "GET", path: `/organization/projects/${seg(projectId)}` },
       ]);
     } catch (error) {
       if (error instanceof AppwriteError && error.status === 404) return null;
@@ -108,7 +112,7 @@ export class AppwriteAdmin {
   async createProject(projectId: string, name: string): Promise<{ $id: string }> {
     const teamId = await this.organizationId();
     return this.first([
-      { method: "POST", path: "/projects", body: { projectId, name, teamId, region: "default" } },
+      { method: "POST", path: "/projects", body: { projectId: assertAppwriteId(projectId), name, teamId, region: "default" } },
       { method: "POST", path: "/organization/projects", body: { projectId, name } },
     ]);
   }
@@ -116,18 +120,18 @@ export class AppwriteAdmin {
   async createServerKey(projectId: string, name: string): Promise<{ $id: string; secret: string }> {
     const body = { name, scopes: APP_KEY_SCOPES, expire: null };
     return this.first([
-      { method: "POST", path: `/projects/${projectId}/keys`, body },
-      { method: "POST", path: `/organization/projects/${projectId}/keys`, body },
+      { method: "POST", path: `/projects/${seg(projectId)}/keys`, body },
+      { method: "POST", path: `/organization/projects/${seg(projectId)}/keys`, body },
     ]);
   }
 
   async addWebPlatform(projectId: string, hostname: string): Promise<void> {
     await this.first([
-      { method: "POST", path: `/projects/${projectId}/platforms`, body: { type: "web", name: hostname, hostname } },
+      { method: "POST", path: `/projects/${seg(projectId)}/platforms`, body: { type: "web", name: hostname, hostname } },
       {
         method: "POST",
         path: "/project/platforms/web",
-        project: projectId,
+        project: assertAppwriteId(projectId),
         body: { platformId: hostname.replace(/[^a-z0-9]/gi, "-").slice(0, 36), name: hostname, hostname },
       },
     ]);
@@ -135,8 +139,8 @@ export class AppwriteAdmin {
 
   async deleteProject(projectId: string): Promise<void> {
     await this.first([
-      { method: "DELETE", path: `/projects/${projectId}` },
-      { method: "DELETE", path: `/organization/projects/${projectId}` },
+      { method: "DELETE", path: `/projects/${seg(projectId)}` },
+      { method: "DELETE", path: `/organization/projects/${seg(projectId)}` },
     ]);
   }
 

@@ -21,3 +21,9 @@ export function toSlug(name: string): string {
 export function isValidSlug(slug: string): boolean {
   return /^[a-z][a-z0-9-]{1,35}$/.test(slug) && !slug.endsWith("-") && !slug.includes("--");
 }
+
+/** Appwrite's own id rule: up to 36 chars of a-z A-Z 0-9 . - _, not starting with a symbol. */
+export function assertAppwriteId(id: string): string {
+  if (!/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,35}$/.test(id)) throw new Error(`"${id}" is not a valid Appwrite project id.`);
+  return id;
+}
