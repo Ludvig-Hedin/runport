@@ -1,0 +1,1760 @@
+<title>App platform</title>
+
+<style>
+/* tokens.css */
+/* Fallback tokens — used ONLY when the project has no palette to generate from.
+   Neutral greys with a single blue accent, contrast-checked in both themes.
+
+   If the project has a real palette, generate from it instead:
+     node build-tokens.mjs app/globals.css tokens.css
+   A wireframe in the wrong colours looks authoritative while lying. */
+
+:root {
+  --background: #fcfcfc;
+  --foreground: #0d0d0d;
+  --card: #ffffff;
+  --card-foreground: #1a1a1a;
+  --popover: #ffffff;
+  --popover-foreground: #1a1a1a;
+  --primary: #0070eb;
+  --primary-foreground: #ffffff;
+  --secondary: #f1f1f1;
+  --secondary-foreground: #1a1a1a;
+  --muted: #ececec;
+  --muted-foreground: #666666;
+  --accent: #ececec;
+  --accent-foreground: #1a1a1a;
+  --surface-inset: #f7f7f7;
+  --surface-inset-hover: #ececec;
+  --destructive: #dc2626;
+  --destructive-foreground: #ffffff;
+  --destructive-text: #b91c1c;
+  --border: #cccccc;
+  --input: #929292;
+  --control-edge: #f4f4f4;
+  --control-icon: #949897;
+  --ring: #0070eb;
+  --sidebar: #fafafa;
+  --sidebar-foreground: #0d0d0d;
+  --sidebar-border: #e5e5e5;
+  --status-ok: #16a34a;
+  --status-warn: #b45309;
+  --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+
+.dark {
+  --background: #0d0d0d;
+  --foreground: #f5f5f5;
+  --card: #171717;
+  --card-foreground: #f5f5f5;
+  --popover: #1c1c1c;
+  --popover-foreground: #f5f5f5;
+  --primary: #3b93ff;
+  --primary-foreground: #0b1220;
+  --secondary: #242424;
+  --secondary-foreground: #f5f5f5;
+  --muted: #262626;
+  --muted-foreground: #a3a3a3;
+  --accent: #262626;
+  --accent-foreground: #f5f5f5;
+  --surface-inset: #1f1f1f;
+  --surface-inset-hover: #2a2a2a;
+  --destructive: #dc2626;
+  --destructive-foreground: #ffffff;
+  --destructive-text: #f87171;
+  --border: #333333;
+  --input: #676767;
+  --control-edge: #2e2e2e;
+  --control-icon: #6e6e6e;
+  --ring: #3b93ff;
+  --sidebar: #131313;
+  --sidebar-foreground: #f5f5f5;
+  --sidebar-border: #2a2a2a;
+  --status-ok: #4ade80;
+  --status-warn: #fbbf24;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not(.light) {
+    --background: #0d0d0d;
+    --foreground: #f5f5f5;
+    --card: #171717;
+    --card-foreground: #f5f5f5;
+    --popover: #1c1c1c;
+    --popover-foreground: #f5f5f5;
+    --primary: #3b93ff;
+    --primary-foreground: #0b1220;
+    --secondary: #242424;
+    --secondary-foreground: #f5f5f5;
+    --muted: #262626;
+    --muted-foreground: #a3a3a3;
+    --accent: #262626;
+    --accent-foreground: #f5f5f5;
+    --surface-inset: #1f1f1f;
+    --surface-inset-hover: #2a2a2a;
+    --destructive-text: #f87171;
+    --border: #333333;
+    --input: #676767;
+    --control-edge: #2e2e2e;
+    --control-icon: #6e6e6e;
+    --ring: #3b93ff;
+    --sidebar: #131313;
+    --sidebar-foreground: #f5f5f5;
+    --sidebar-border: #2a2a2a;
+    --status-ok: #4ade80;
+    --status-warn: #fbbf24;
+  }
+}
+
+</style>
+<style>
+/* /Users/ludvighedin/.claude/skills/plan/wireframe/page.css */
+/* The plan page.
+   Pair with tokens.css (the project's real colours) and kit.css (the frames).
+
+   This page has ONE job: a person juggling ten other threads opens it on a
+   phone and, in about a minute, knows what is being proposed, what it will
+   cost him, and what he is being asked to decide. Everything else on the page
+   is optional reading, and it is laid out so it reads as optional.
+
+   The long version of the plan is the markdown file in the repo. That one is
+   for agents. This one is for him. Do not put the same text in both. */
+
+:root {
+  color-scheme: light dark;
+}
+
+body {
+  background: var(--background);
+  color: var(--foreground);
+  font-family: var(--font-sans, ui-sans-serif, system-ui, sans-serif);
+  font-size: 16px;
+  line-height: 1.6;
+  margin: 0;
+  padding: 24px 20px 96px;
+  -webkit-text-size-adjust: 100%;
+}
+
+main {
+  max-width: 720px;
+  margin: 0 auto;
+}
+
+/* --- Head --------------------------------------------------------------- */
+
+.eyebrow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  font-size: 13px;
+  color: var(--muted-foreground);
+  margin: 0 0 12px;
+}
+.chip {
+  display: inline-flex;
+  align-items: center;
+  height: 22px;
+  padding: 0 8px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--surface-inset, var(--muted));
+  color: var(--muted-foreground);
+  font-size: 12px;
+  font-weight: 500;
+}
+.chip--ink {
+  border-color: var(--foreground);
+  background: var(--foreground);
+  color: var(--background);
+}
+
+h1 {
+  font-size: 28px;
+  line-height: 1.2;
+  letter-spacing: -0.02em;
+  margin: 0 0 10px;
+  text-wrap: balance;
+}
+.lede {
+  font-size: 18px;
+  line-height: 1.5;
+  color: var(--muted-foreground);
+  margin: 0;
+}
+
+/* --- The executive summary ---------------------------------------------- */
+
+/* The only block on the page he is guaranteed to read. Four rows, each one
+   line. If a row needs two sentences, the plan is too big and the scope
+   question was answered wrong. */
+.tldr {
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  background: var(--card);
+  padding: 4px 18px;
+  margin: 24px 0 8px;
+}
+.tldr dl {
+  margin: 0;
+  display: grid;
+  grid-template-columns: 96px 1fr;
+  gap: 0;
+}
+.tldr dt {
+  grid-column: 1;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--muted-foreground);
+  padding: 12px 0;
+}
+.tldr dd {
+  grid-column: 2;
+  margin: 0;
+  font-size: 15px;
+  padding: 12px 0;
+}
+.tldr dt + dd + dt,
+.tldr dt + dd + dt + dd {
+  border-block-start: 1px solid var(--border);
+}
+@media (max-width: 520px) {
+  .tldr dl {
+    display: block;
+  }
+  /* `grid-column` survives the display change and forces a second implicit
+     column back, so it has to be released explicitly. */
+  .tldr dt,
+  .tldr dd {
+    grid-column: auto;
+  }
+  .tldr dt {
+    padding: 14px 0 0;
+  }
+  .tldr dd {
+    padding: 2px 0 14px;
+  }
+  .tldr dt + dd + dt,
+  .tldr dt + dd + dt + dd {
+    border-block-start: 0;
+  }
+  .tldr dt ~ dt {
+    border-block-start: 1px solid var(--border);
+  }
+}
+
+/* A three-column change table does not survive a phone. Below the breakpoint
+   each row becomes a small stacked block with its own labels, which is what a
+   person reading in a lift can actually use. */
+@media (max-width: 560px) {
+  .changes thead {
+    display: none;
+  }
+  .changes,
+  .changes tbody,
+  .changes tr,
+  .changes td {
+    display: block;
+    width: 100%;
+  }
+  .changes tr {
+    border-block-end: 1px solid var(--border);
+    padding: 14px 0;
+  }
+  .changes tr:last-child {
+    border-block-end: 0;
+  }
+  .changes td {
+    border: 0;
+    padding: 0;
+  }
+  .changes td:first-child {
+    font-size: 16px;
+  }
+  .changes td:nth-child(2) {
+    margin: 2px 0 6px;
+  }
+  .changes td:nth-child(3) {
+    color: var(--muted-foreground);
+    font-size: 15px;
+  }
+}
+
+/* --- Sections ----------------------------------------------------------- */
+
+h2 {
+  font-size: 20px;
+  line-height: 1.3;
+  letter-spacing: -0.01em;
+  margin: 44px 0 12px;
+  padding-block-start: 24px;
+  border-block-start: 1px solid var(--border);
+}
+h2:first-of-type {
+  border: 0;
+  padding-block-start: 0;
+}
+h3 {
+  font-size: 16px;
+  margin: 28px 0 8px;
+}
+p,
+li {
+  font-size: 16px;
+}
+ul,
+ol {
+  padding-inline-start: 22px;
+}
+li {
+  margin: 4px 0;
+}
+strong,
+b {
+  font-weight: 600;
+}
+a {
+  color: var(--primary);
+  text-underline-offset: 2px;
+}
+
+/* A folded section. Everything he does not have to read sits inside one of
+   these, closed. That is what keeps the page to a minute. */
+details {
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  background: var(--card);
+  padding: 0 18px;
+  margin: 16px 0;
+}
+details[open] {
+  padding-block-end: 8px;
+}
+summary {
+  cursor: pointer;
+  list-style: none;
+  padding: 14px 0;
+  font-size: 15px;
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+summary::-webkit-details-marker {
+  display: none;
+}
+summary::after {
+  content: "";
+  width: 7px;
+  height: 7px;
+  margin-inline-start: auto;
+  border-inline-end: 1.5px solid var(--muted-foreground);
+  border-block-end: 1.5px solid var(--muted-foreground);
+  transform: rotate(45deg);
+  transition: transform 150ms ease;
+}
+details[open] summary::after {
+  transform: rotate(225deg);
+}
+summary .hint {
+  font-weight: 400;
+  color: var(--muted-foreground);
+  font-size: 13px;
+}
+
+/* --- Assumptions -------------------------------------------------------- */
+
+/* Read to catch a wrong call early, so it is scannable and quiet. */
+.assumptions {
+  background: var(--surface-inset, var(--muted));
+  border-radius: 16px;
+  padding: 14px 20px;
+  margin: 0;
+}
+.assumptions li {
+  font-size: 15px;
+  margin: 6px 0;
+}
+
+/* --- Tables ------------------------------------------------------------- */
+
+.scroll {
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
+table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 15px;
+}
+th,
+td {
+  text-align: start;
+  padding: 10px 12px;
+  border-block-end: 1px solid var(--border);
+  vertical-align: top;
+}
+th {
+  color: var(--muted-foreground);
+  font-weight: 500;
+  font-size: 13px;
+  white-space: nowrap;
+}
+tr:last-child td {
+  border-block-end: 0;
+}
+
+/* The change table: what, where, why. One row per real change. This is the
+   section that answers "what am I actually approving". */
+.changes td:first-child {
+  font-weight: 600;
+}
+.changes code {
+  font-size: 12.5px;
+  color: var(--muted-foreground);
+  word-break: break-all;
+}
+
+/* --- Risk rows ---------------------------------------------------------- */
+
+.risks {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+.risks li {
+  padding: 12px 0;
+  border-block-end: 1px solid var(--border);
+  font-size: 15px;
+}
+.risks li:last-child {
+  border-block-end: 0;
+}
+.risks b {
+  display: block;
+}
+.risks span {
+  color: var(--muted-foreground);
+}
+
+/* --- Code --------------------------------------------------------------- */
+
+pre {
+  background: var(--surface-inset, var(--muted));
+  border-radius: 12px;
+  padding: 12px 16px;
+  overflow-x: auto;
+  font-size: 13px;
+  line-height: 1.5;
+}
+code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+/* --- Figures ------------------------------------------------------------ */
+
+figure {
+  margin: 20px 0 0;
+}
+.wf-figure {
+  margin: 24px 0 0;
+}
+.wf-figure + .wf-figure {
+  margin-block-start: 36px;
+}
+.wf-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin: 0 0 10px;
+  font-size: 15px;
+  font-weight: 600;
+}
+.wf-head .n {
+  display: inline-grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  border-radius: 6px;
+  background: var(--foreground);
+  color: var(--background);
+  font-size: 12px;
+  font-weight: 600;
+  flex: none;
+}
+
+/* --- The decision ------------------------------------------------------- */
+
+/* Neutral, not a coloured ring. The weight comes from the ink and the words. */
+.decision {
+  border: 1px solid var(--foreground);
+  border-radius: 20px;
+  padding: 20px;
+  margin-block-start: 44px;
+  background: var(--card);
+}
+.decision h2 {
+  border: 0;
+  padding: 0;
+  margin: 0 0 8px;
+  font-size: 18px;
+}
+.decision p:last-child {
+  margin-block-end: 0;
+}
+.decision ol {
+  margin-block-end: 0;
+}
+
+@media (max-width: 480px) {
+  summary .hint {
+    display: none;
+  }
+}
+
+/* Print, because a plan does get printed or saved to PDF now and then. The
+   folded sections have to be open on paper. */
+@media print {
+  details {
+    border: 0;
+    padding: 0;
+  }
+  details > *:not(summary) {
+    display: revert !important;
+  }
+  summary::after {
+    display: none;
+  }
+}
+
+</style>
+<style>
+/* /Users/ludvighedin/.claude/skills/plan/wireframe/kit.css */
+/* Wireframe kit - draws plan mockups in the project's REAL tokens.
+   Pair with a generated tokens.css (build-tokens.mjs). Every colour reads a
+   token; nothing is invented, so a mockup cannot drift from the product by
+   being prettier than it.
+
+   Class prefix `wf-` throughout, so a wireframe can sit inside a page that has
+   its own styles without collision.
+
+   GEOMETRY, as the app draws it since 2026-09-09 (Figma frame 44-7055):
+     control heights   28 / 32 / 36        (sm / default / lg)
+     control corners    8 / 10 / 12        rectangles, not pills
+     control insets    10 / 12 / 14
+     card              16px corner, --card fill, --border hairline
+     inset tile        12px corner, --surface-inset
+     popover/menu      16px corner, 8px pad, rows at 10px
+     dialog            24px corner, 24px pad, close 36px at 18/24
+     sheet             20px top corners
+     type ladder       24 / 16 / 14 / 12, floor 12
+
+   COLOUR, as the app draws it:
+     the one solid primary per screen is NEUTRAL INK (--foreground).
+     brand blue survives as an opt-in button fill, on links, on the switch,
+     and on the info badge. Nowhere else. A wireframe that is blue all over is
+     a wireframe that does not look like the product. */
+
+.wf {
+  --wf-r-ctl-sm: 8px;
+  --wf-r-ctl: 10px;
+  --wf-r-ctl-lg: 12px;
+  --wf-r-card: 16px;
+  --wf-r-tile: 12px;
+  --wf-r-overlay: 16px;
+  --wf-r-modal: 24px;
+  --wf-r-sheet: 20px;
+  --wf-h-sm: 28px;
+  --wf-h-md: 32px;
+  --wf-h-lg: 36px;
+  --wf-x-sm: 10px;
+  --wf-x-md: 12px;
+  --wf-x-lg: 14px;
+
+  font-family: var(--font-sans, ui-sans-serif, system-ui, sans-serif);
+  color: var(--foreground);
+  background: var(--background);
+  font-size: 14px;
+  line-height: 1.5;
+  container-type: inline-size;
+  border-radius: var(--wf-r-card);
+  border: 1px solid var(--border);
+  overflow: hidden;
+}
+
+.wf *,
+.wf *::before,
+.wf *::after {
+  box-sizing: border-box;
+}
+
+/* --- Frames ------------------------------------------------------------- */
+
+.wf-frame {
+  margin: 0 auto;
+  max-width: 100%;
+}
+.wf-frame--phone {
+  width: 390px;
+}
+.wf-frame--tablet {
+  width: 768px;
+}
+/* A desktop mockup draws at a real desktop width and is scaled to fit by
+   `fit.js`. `width: 100%` would instead reflow it into a phone-shaped layout,
+   which shows a screen the product will never render. */
+.wf-frame--desktop {
+  width: 1280px;
+}
+
+/* The backdrop a frame sits on. This is what makes a white app screen read as
+   a SCREEN rather than as more page. No shadow, no glow: a quiet inset pad and
+   the frame's own hairline do the whole job. */
+.wf-stage {
+  background: var(--surface-inset, var(--muted));
+  border-radius: var(--wf-r-modal);
+  padding: 20px;
+}
+@media (max-width: 520px) {
+  .wf-stage {
+    padding: 12px;
+  }
+}
+
+/* --- Fit: every frame fits its column, always --------------------------- */
+
+/* The frame must keep its real width here, or it reflows into a phone-shaped
+   layout before the script can measure and scale it. `max-width: 100%` on
+   `.wf-frame` is right everywhere else and wrong inside a fit box. */
+.wf-fit .wf {
+  max-width: none;
+  flex: none;
+}
+
+.wf-fit {
+  /* Must take its column, not shrink-wrap the frame inside it. A shrink-wrapped
+     box measures as wide as its own content, so the fit maths sees scale 1 and
+     the frame overflows the page. */
+  width: 100%;
+  /* Hidden, not auto. A fitted frame has nothing to scroll to, and `auto` left
+     a 1-2px sub-pixel scroller under every mockup. `fit.js` turns scrolling on
+     only while a frame is opened at full size. */
+  overflow-x: hidden;
+  position: relative;
+  /* Override both on the page when the plan is not in English. */
+  --wf-zoom-in-label: "Open full size";
+  --wf-zoom-out-label: "Fit to screen";
+}
+
+/* The offer sits UNDER the frame, never over it. An overlay badge covered the
+   bottom-right corner of every mockup, which is where a primary action lives. */
+.wf-fit[data-wf-scaled="true"] {
+  cursor: zoom-in;
+  padding-block-end: 22px;
+}
+.wf-fit[data-wf-scaled="true"]::after {
+  content: var(--wf-zoom-in-label);
+  position: absolute;
+  inset-block-end: 0;
+  inset-inline-end: 0;
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--muted-foreground);
+  pointer-events: none;
+}
+.wf-fit[data-wf-zoomed="true"] {
+  cursor: zoom-out;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
+.wf-fit[data-wf-zoomed="true"]::after {
+  content: var(--wf-zoom-out-label);
+}
+
+/* Two frames side by side, stacking when there is not room for both.
+   `auto-fit` rather than a container query on purpose: `.wf-pair` wraps the
+   frames from OUTSIDE, so it has no `.wf` container context to query and an
+   element cannot query itself. */
+.wf-pair {
+  display: grid;
+  gap: 20px;
+  /* The min is the widest frame a pair holds (a 390px phone inside a 12px
+     stage pad), not a guessed 300px. A track narrower than its frame does not
+     shrink the frame: it lets the frame hang out of the track, where the fit
+     box clips it. Stacking is the correct answer at that width. */
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 414px), 1fr));
+  align-items: start;
+}
+.wf-pair > * {
+  min-width: 0;
+}
+.wf-pair .wf-stage,
+.wf-compare .wf-stage {
+  padding: 12px;
+}
+
+/* Before and after, labelled. The single most useful frame in a plan is the
+   one that shows today's screen beside the proposed one. */
+.wf-compare {
+  display: grid;
+  gap: 20px;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 414px), 1fr));
+  align-items: start;
+}
+.wf-compare > * {
+  min-width: 0;
+}
+.wf-side__label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--muted-foreground);
+  margin-block-end: 8px;
+}
+
+/* --- App shell ---------------------------------------------------------- */
+
+.wf-shell {
+  display: grid;
+  grid-template-columns: 220px 1fr;
+  min-height: 420px;
+}
+.wf-shell--narrow {
+  grid-template-columns: 1fr;
+}
+.wf-shell--rail {
+  grid-template-columns: 64px 1fr;
+}
+
+.wf-sidebar {
+  background: var(--sidebar, var(--card));
+  border-inline-end: 1px solid var(--sidebar-border, var(--border));
+  padding: 12px 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+/* Nav rows are rows, not pills: 32px at the row corner, the selected one on a
+   --muted plate. An inverted `bg-foreground` row is the wrong affordance. */
+.wf-navrow {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  height: var(--wf-h-md);
+  padding: 0 var(--wf-x-md);
+  border-radius: var(--wf-r-ctl);
+  color: var(--sidebar-foreground, var(--foreground));
+  font-size: 14px;
+}
+.wf-navrow[aria-current="page"],
+.wf-navrow.is-active {
+  background: var(--muted);
+  color: var(--foreground);
+  font-weight: 500;
+}
+
+/* The editor rail: a 32px square at the 12px corner, with a 10px caption under
+   it. The caption is the app's one sub-12px exception and it stays here. */
+.wf-rail {
+  background: var(--sidebar, var(--card));
+  border-inline-end: 1px solid var(--sidebar-border, var(--border));
+  padding: 10px 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+}
+.wf-railbtn {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 3px;
+  width: 48px;
+}
+.wf-railbtn__box {
+  width: var(--wf-h-md);
+  height: var(--wf-h-md);
+  border-radius: var(--wf-r-ctl-lg);
+  display: grid;
+  place-items: center;
+  color: var(--control-icon, var(--muted-foreground));
+}
+.wf-railbtn.is-active .wf-railbtn__box {
+  background: var(--muted);
+  color: var(--foreground);
+}
+.wf-railbtn__cap {
+  font-size: 10px;
+  line-height: 1.2;
+  color: var(--muted-foreground);
+}
+.wf-railbtn.is-active .wf-railbtn__cap {
+  color: var(--foreground);
+}
+
+.wf-main {
+  padding: 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  min-width: 0;
+}
+
+/* Navbars are opaque. Never a translucent fill, never a blur. */
+.wf-topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 16px;
+  border-block-end: 1px solid var(--border);
+  background: var(--background);
+}
+
+/* --- Type ladder (24 / 16 / 14 / 12, floor 12) -------------------------- */
+
+.wf-title {
+  font-size: 24px;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  margin: 0;
+}
+.wf-section {
+  font-size: 16px;
+  font-weight: 600;
+  margin: 0;
+}
+.wf-cardtitle {
+  font-size: 14px;
+  font-weight: 600;
+  margin: 0;
+}
+.wf-body {
+  font-size: 14px;
+  margin: 0;
+}
+.wf-meta {
+  font-size: 12px;
+  color: var(--muted-foreground);
+  margin: 0;
+}
+.wf-label {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--muted-foreground);
+  display: block;
+  margin-block-end: 6px;
+}
+
+/* --- Surfaces ----------------------------------------------------------- */
+
+.wf-card {
+  background: var(--card);
+  color: var(--card-foreground);
+  border: 1px solid var(--border);
+  border-radius: var(--wf-r-card);
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+/* The inset tile INSIDE a card. Own token per theme; alpha over a surface
+   cannot be one value in both. */
+.wf-inset {
+  background: var(--surface-inset, var(--muted));
+  border-radius: var(--wf-r-tile);
+  padding: 12px;
+}
+
+.wf-grid {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+}
+
+.wf-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 12px;
+  border-radius: var(--wf-r-tile);
+  min-width: 0;
+}
+.wf-row + .wf-row {
+  border-block-start: 1px solid var(--border);
+  border-radius: 0;
+}
+
+.wf-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 0;
+}
+.wf-inline {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  min-width: 0;
+}
+.wf-spacer {
+  flex: 1;
+}
+.wf-truncate {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+/* --- Controls: three tiers, rectangles, one neutral primary ------------- */
+
+.wf-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  height: var(--wf-h-md);
+  padding: 0 var(--wf-x-md);
+  border-radius: var(--wf-r-ctl);
+  border: 1px solid transparent;
+  /* The one solid action per screen: neutral ink, near-black in light and
+     near-white in dark. NOT the brand blue. */
+  background: var(--foreground);
+  color: var(--background);
+  font-size: 14px;
+  font-weight: 500;
+  white-space: nowrap;
+}
+.wf-btn--sm {
+  height: var(--wf-h-sm);
+  padding: 0 var(--wf-x-sm);
+  border-radius: var(--wf-r-ctl-sm);
+}
+.wf-btn--lg {
+  height: var(--wf-h-lg);
+  padding: 0 var(--wf-x-lg);
+  border-radius: var(--wf-r-ctl-lg);
+}
+/* Brand blue, opt in. A screen that genuinely wants it asks for it. */
+.wf-btn--accent {
+  background: var(--primary);
+  color: var(--primary-foreground);
+}
+.wf-btn--outline {
+  background: transparent;
+  color: var(--foreground);
+  border-color: var(--control-edge, var(--border));
+}
+/* The filled quiet plate, for a row where an outline would disappear. */
+.wf-btn--secondary {
+  background: var(--control-plate, var(--secondary));
+  color: var(--foreground);
+}
+.wf-btn--ghost {
+  background: transparent;
+  color: var(--foreground);
+}
+/* The "..." trigger beside an object. Always icon-only at the sm tier. */
+.wf-btn--contextual {
+  background: transparent;
+  color: var(--muted-foreground);
+  border-color: var(--control-edge-soft, var(--border));
+}
+.wf-btn--destructive {
+  background: var(--destructive);
+  color: var(--destructive-foreground);
+}
+.wf-btn--link {
+  background: transparent;
+  color: var(--primary);
+  padding: 0;
+  height: auto;
+  font-weight: 400;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+/* Icon-only keeps the square and the corner of its tier. */
+.wf-btn--icon {
+  width: var(--wf-h-md);
+  padding: 0;
+}
+.wf-btn--icon.wf-btn--sm {
+  width: var(--wf-h-sm);
+}
+.wf-btn--icon.wf-btn--lg {
+  width: var(--wf-h-lg);
+}
+/* Prompt-box chrome only. Inside a composer every control is round. */
+.wf-btn--circle {
+  border-radius: 9999px;
+}
+
+/* Fields carry --input, the loudest control edge, because an empty field has
+   no other affordance. Never --control-edge here. */
+.wf-field {
+  display: flex;
+  align-items: center;
+  height: var(--wf-h-md);
+  padding: 0 var(--wf-x-md);
+  border-radius: var(--wf-r-ctl);
+  border: 1px solid var(--input);
+  background: transparent;
+  color: var(--muted-foreground);
+  font-size: 14px;
+  width: 100%;
+  min-width: 0;
+}
+.wf-field--sm {
+  height: var(--wf-h-sm);
+  padding: 0 var(--wf-x-sm);
+  border-radius: var(--wf-r-ctl-sm);
+}
+.wf-field--lg {
+  height: var(--wf-h-lg);
+  padding: 0 var(--wf-x-lg);
+  border-radius: var(--wf-r-ctl-lg);
+}
+/* Typed text is the user's word, so it is normal weight and full contrast. */
+.wf-field--filled {
+  color: var(--foreground);
+}
+/* A trigger's label is the app's word, so it is medium. */
+.wf-field--trigger {
+  font-weight: 500;
+  color: var(--foreground);
+  justify-content: space-between;
+}
+/* Textarea grows, so it pins the base tier's corner instead of its own. */
+.wf-textarea {
+  border-radius: var(--wf-r-ctl);
+  height: auto;
+  min-height: 72px;
+  padding: 8px var(--wf-x-md);
+  align-items: flex-start;
+  display: block;
+}
+
+.wf-switch {
+  width: 36px;
+  height: 20px;
+  border-radius: 9999px;
+  background: color-mix(in oklab, var(--muted-foreground) 30%, transparent);
+  position: relative;
+  flex: none;
+}
+.wf-switch::after {
+  content: "";
+  position: absolute;
+  inset-block-start: 2px;
+  inset-inline-start: 2px;
+  width: 16px;
+  height: 16px;
+  border-radius: 9999px;
+  background: var(--primary-foreground);
+}
+/* On is the brand blue. This one IS blue in the product. */
+.wf-switch.is-on {
+  background: var(--primary);
+}
+.wf-switch.is-on::after {
+  inset-inline-start: 18px;
+}
+
+/* Tab strip. Height sits on the container, options run at full height, or the
+   strip pushes past the button beside it. */
+.wf-tabs {
+  display: inline-flex;
+  height: var(--wf-h-md);
+  padding: 2px;
+  /* One step rounder than its options, to fit the 2px gap. */
+  border-radius: var(--wf-r-ctl-lg);
+  border: 1px solid var(--control-edge, var(--border));
+  background: var(--card);
+  gap: 2px;
+  max-width: 100%;
+}
+.wf-tabs--sm {
+  height: var(--wf-h-sm);
+  border-radius: var(--wf-r-ctl);
+}
+.wf-tabs--lg {
+  height: var(--wf-h-lg);
+  border-radius: 14px;
+}
+/* A strip that switches the PAGE draws no track and no border: the only thing
+   drawn is the plate under the active tab. */
+.wf-tabs--bare {
+  border: 0;
+  background: transparent;
+  padding: 0;
+}
+.wf-tab {
+  display: inline-flex;
+  align-items: center;
+  height: 100%;
+  padding: 0 var(--wf-x-md);
+  border-radius: var(--wf-r-ctl);
+  font-size: 14px;
+  color: var(--muted-foreground);
+  white-space: nowrap;
+}
+.wf-tabs--sm .wf-tab {
+  padding: 0 var(--wf-x-sm);
+  border-radius: var(--wf-r-ctl-sm);
+}
+.wf-tabs--lg .wf-tab {
+  padding: 0 var(--wf-x-lg);
+  border-radius: var(--wf-r-ctl-lg);
+}
+.wf-tab.is-active {
+  background: var(--muted);
+  color: var(--foreground);
+  font-weight: 500;
+}
+
+/* --- Prompt composer: the app's one deliberately round surface ---------- */
+
+/* Draw it only when the plan is ABOUT it. Its geometry is hand-tuned in the
+   product and the owner treats a regression there as its own task. */
+.wf-composer {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  border-radius: 20px;
+  border: 1px solid var(--chat-input-border, var(--border));
+  background: var(--chat-input-bg, var(--card));
+  padding: 10px 12px;
+}
+.wf-composer__text {
+  font-size: 14px;
+  color: var(--muted-foreground);
+  min-height: 20px;
+}
+.wf-composer__bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* --- Badges: colour never carries meaning alone, so each has a word ----- */
+
+.wf-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 22px;
+  padding: 0 10px;
+  border-radius: 9999px;
+  font-size: 12px;
+  font-weight: 500;
+  background: var(--muted);
+  color: var(--muted-foreground);
+  white-space: nowrap;
+}
+.wf-badge--ok {
+  background: color-mix(in oklab, var(--status-ok, #16a34a) 14%, transparent);
+  color: var(--status-ok-fg, var(--status-ok, #16a34a));
+}
+.wf-badge--warn {
+  background: color-mix(in oklab, var(--status-warn, #d97706) 14%, transparent);
+  color: var(--status-warn-fg, var(--status-warn, #d97706));
+}
+.wf-badge--info {
+  background: color-mix(in oklab, var(--primary) 12%, transparent);
+  color: var(--primary);
+}
+.wf-badge--danger {
+  background: color-mix(in oklab, var(--destructive) 12%, transparent);
+  color: var(--destructive-text, var(--destructive));
+}
+
+/* --- Overlays ----------------------------------------------------------- */
+
+/* Popovers, dropdowns, selects: 16px, 8px padding, hairline border, rows at
+   10px. Never a ring, which sits proud of the corner. */
+.wf-popover {
+  background: var(--popover);
+  color: var(--popover-foreground);
+  border: 1px solid var(--border);
+  border-radius: var(--wf-r-overlay);
+  padding: 8px;
+  min-width: 200px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.wf-menuitem {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: var(--wf-h-md);
+  padding: 0 var(--wf-x-md);
+  border-radius: var(--wf-r-ctl);
+  font-size: 14px;
+}
+.wf-menuitem.is-active {
+  background: var(--accent, var(--muted));
+}
+.wf-menuitem--destructive {
+  color: var(--destructive-text, var(--destructive));
+}
+.wf-menusep {
+  height: 1px;
+  background: var(--border);
+  margin: 4px 0;
+}
+
+/* Dialogs: 24px corner, 24px padding. The close is 36px on a --muted plate,
+   centred on the title's FIRST LINE, so 18px from the top. */
+.wf-dialog {
+  background: var(--popover);
+  color: var(--popover-foreground);
+  border: 1px solid var(--border);
+  border-radius: var(--wf-r-modal);
+  padding: 24px;
+  max-width: 480px;
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+.wf-dialog__close {
+  position: absolute;
+  inset-block-start: 18px;
+  inset-inline-end: 24px;
+  width: 36px;
+  height: 36px;
+  border-radius: 9999px;
+  background: var(--muted);
+  color: var(--foreground);
+  display: grid;
+  place-items: center;
+}
+
+/* Docked to the bottom edge, so it spans its frame. A sheet that floats inset
+   reads as a dialog, which is the wrong affordance. */
+.wf-sheet {
+  width: 100%;
+  background: var(--popover);
+  border: 1px solid var(--border);
+  border-start-start-radius: var(--wf-r-sheet);
+  border-start-end-radius: var(--wf-r-sheet);
+  padding: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+.wf-sheet__grip {
+  width: 36px;
+  height: 4px;
+  border-radius: 9999px;
+  background: var(--border);
+  margin: -6px auto 4px;
+}
+
+/* Scrim, so an overlay reads as an overlay in a still image. */
+.wf-scrim {
+  background: color-mix(in oklab, var(--foreground) 45%, transparent);
+  padding: 24px;
+  display: grid;
+  place-items: center;
+  min-height: 320px;
+}
+.wf-scrim--bottom {
+  align-items: end;
+  padding: 0;
+}
+
+/* --- States: a wireframe without them is a diagram, not a screen -------- */
+
+.wf-empty,
+.wf-error {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  text-align: center;
+  padding: 32px 24px;
+}
+.wf-error {
+  color: var(--destructive-text, var(--destructive));
+}
+
+.wf-skeleton {
+  background: var(--muted);
+  border-radius: 8px;
+  height: 12px;
+  width: 100%;
+}
+.wf-skeleton--title {
+  height: 16px;
+  width: 40%;
+}
+.wf-skeleton--block {
+  height: 72px;
+  border-radius: var(--wf-r-tile);
+}
+
+/* --- Annotation: the wireframe's own voice, never the product's --------- */
+
+/* All of it is NEUTRAL. A blue rule drawn around a mockup reads as product
+   chrome, and then the owner has to work out which blue is real. */
+.wf-note {
+  font-size: 12px;
+  color: var(--muted-foreground);
+  border-inline-start: 1px solid var(--border);
+  padding-inline-start: 10px;
+  margin: 8px 0 0;
+}
+/* Numbered callout pinned to a spot, referenced from the caption below. */
+.wf-pin {
+  display: inline-grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 9999px;
+  background: var(--foreground);
+  color: var(--background);
+  font-size: 11px;
+  font-weight: 600;
+  flex: none;
+}
+.wf-caption {
+  font-size: 13px;
+  color: var(--muted-foreground);
+  margin: 10px 0 0;
+  line-height: 1.5;
+}
+.wf-caption b,
+.wf-caption strong {
+  color: var(--foreground);
+  font-weight: 600;
+}
+/* A label chip ABOVE a frame: "Today", "Proposed", "New", "Changed". This is
+   where a change is announced, not inside the product surface. */
+.wf-tag {
+  display: inline-flex;
+  align-items: center;
+  height: 20px;
+  padding: 0 8px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--surface-inset, var(--muted));
+  color: var(--muted-foreground);
+  font-size: 12px;
+  font-weight: 500;
+}
+.wf-tag--new {
+  border-color: var(--foreground);
+  background: var(--foreground);
+  color: var(--background);
+}
+/* Marks the one region that changed. A hairline in ink, not a dashed blue
+   rope. Use it at most twice per frame, or it stops meaning anything. */
+.wf-new {
+  outline: 1px solid color-mix(in oklab, var(--foreground) 45%, transparent);
+  outline-offset: 3px;
+  border-radius: var(--wf-r-tile);
+}
+
+/* --- Placeholder media -------------------------------------------------- */
+
+.wf-img {
+  background: var(--muted);
+  border-radius: var(--wf-r-tile);
+  aspect-ratio: 16 / 9;
+  display: grid;
+  place-items: center;
+  color: var(--muted-foreground);
+  font-size: 12px;
+}
+.wf-avatar {
+  width: 32px;
+  height: 32px;
+  border-radius: 9999px;
+  background: var(--muted);
+  flex: none;
+}
+.wf-icon {
+  width: 18px;
+  height: 18px;
+  color: var(--control-icon, var(--muted-foreground));
+  flex: none;
+}
+
+/* The one element `fit.js` scales. It creates this wrapper itself, so a fit box
+   holding a pair, a stage pad or a labelled before/after scales as one thing
+   rather than leaving everything beside the first frame at full width. */
+.wf-fit__inner {
+  display: block;
+}
+
+/* --- Interactive prototypes (2026-09-20) --------------------------------
+
+   `proto.js` turns a frame into something the owner can press. These rules are
+   the affordances that go with it: a pressable control says so, and a live
+   region says it is live rather than a picture of one.
+   ---------------------------------------------------------------------- */
+
+[data-v],
+[data-toggle] {
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+[data-v]:focus-visible,
+[data-toggle]:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
+
+/* A segmented strip that is actually pressable. Same geometry as the product:
+   28px tall, 8px corners, 10px inset, the active plate in --muted. */
+.wf-seg {
+  display: inline-flex;
+  height: 28px;
+  padding: 2px;
+  gap: 2px;
+  border-radius: 9px;
+  background: var(--card);
+  border: 1px solid var(--control-edge, var(--border));
+  max-width: 100%;
+}
+.wf-seg > * {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 9px;
+  border-radius: 7px;
+  font-size: 12px;
+  line-height: 1;
+  color: var(--muted-foreground);
+  background: none;
+  border: 0;
+  font: inherit;
+  font-size: 12px;
+  white-space: nowrap;
+}
+.wf-seg > *:hover {
+  background: var(--control-plate-hover, var(--muted));
+}
+.wf-seg > .is-on {
+  background: var(--muted);
+  color: var(--foreground);
+  font-weight: 500;
+}
+.wf-seg--bare {
+  border: 0;
+  background: none;
+  padding: 0;
+}
+
+/* A row of label plus control, the shape every settings panel draws. The
+   control hugs the end rather than stretching, which is what stops a five
+   option menu from being three times the width of a two option strip. */
+.wf-setting {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 40px;
+  font-size: 13px;
+}
+.wf-setting > :first-child {
+  margin-inline-end: auto;
+  color: var(--foreground);
+}
+.wf-setting .wf-field,
+.wf-setting .wf-seg {
+  flex: 0 0 auto;
+  width: auto;
+}
+
+/* A disclosure whose body is hidden until `data-toggle` flips. */
+.wf-disclose {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  color: var(--muted-foreground);
+  padding-block: 6px;
+  background: none;
+  border: 0;
+  font: inherit;
+  font-size: 13px;
+}
+.wf-disclose svg {
+  width: 16px;
+  height: 16px;
+  transition: transform 140ms ease;
+}
+.wf-disclose.is-on svg {
+  transform: rotate(90deg);
+}
+
+/* Says, once, that this frame is not a picture. Put it beside the figure
+   heading, never inside the product surface. */
+.wf-live {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 20px;
+  padding: 0 8px;
+  border-radius: 9999px;
+  background: var(--muted);
+  color: var(--muted-foreground);
+  font-size: 11px;
+  font-weight: 500;
+}
+.wf-live::before {
+  content: "";
+  width: 6px;
+  height: 6px;
+  border-radius: 9999px;
+  background: var(--status-ok, currentColor);
+}
+
+/* `proto.js` hides a conditional region with the `hidden` attribute, and the
+   UA rule for it is only `display: none` at the lowest specificity. Any class
+   that sets `display` beats it, which silently leaves every conditional row on
+   screen. This is the one `!important` in the kit and it earns its keep. */
+[hidden] {
+  display: none !important;
+}
+
+</style>
+
+<main>
+
+  <p class="eyebrow">
+    <span class="chip chip--ink">P1</span>
+    <span class="chip">About 3 days</span>
+    <span class="chip">Free on the Mac</span>
+    <span>23 October 2026</span>
+  </p>
+
+  <h1>Say "create an app" and get one, login and database included</h1>
+  <p class="lede">Appwrite runs on your Mac for accounts and data. A small tool
+    of ours lets Claude set up each new app by itself, with no sign-ups or keys.</p>
+
+  <div class="tldr">
+    <dl>
+      <dt>What</dt>
+      <dd>Self-hosted Appwrite plus one "create app" tool for Claude Code. First on your Mac only.</dd>
+      <dt>Why now</dt>
+      <dd>Appwrite's new version (September) is the first light enough for a laptop. Today every app still needs Vercel, Convex, Clerk and GitHub by hand.</dd>
+      <dt>Effort</dt>
+      <dd>About 3 days of agent work until it works on your Mac. Online, name and own panel come after.</dd>
+      <dt>The ask</dt>
+      <dd>OK that on Railway, Appwrite does accounts and data while Railway runs the apps?</dd>
+    </dl>
+  </div>
+
+  <h2>What ChatGPT got wrong</h2>
+  <ul class="risks">
+    <li><b>You cannot rebrand Appwrite's admin.</b> <span>The new admin screen is not public code. Rebranding means our own panel, which you already chose.</span></li>
+    <li><b>Railway and Render cannot run Appwrite's hosting.</b> <span>It needs Docker access they do not give. Accounts, data and files still work there, so Railway runs the apps instead.</span></li>
+    <li><b>"Claude creates the project" is unproven.</b> <span>Self-hosted users report a permission error. We test it first, with a manual fallback.</span></li>
+    <li><b>A Clerk and Convex dashboard in week 2 is early.</b> <span>It skips your order: works, then name, then look.</span></li>
+    <li><b>Your Mac is tight.</b> <span>12 GB free disk, about 20 GB needed.</span></li>
+  </ul>
+  <p>What it got right: Appwrite is a good base, do not build a cloud, and only the "create app" layer is missing.</p>
+
+  <h2>What I assumed</h2>
+  <ul class="assumptions">
+    <li>Railway runs the apps later. Appwrite does accounts, data and files.</li>
+    <li>First version opens only on your Mac. Not on your phone, not for others.</li>
+    <li>Only you use it. No sign-ups, teams or billing for others.</li>
+    <li>Appwrite stays unmodified, pinned to version 2.6.1.</li>
+    <li>GitHub stays. Each app gets its own private repo.</li>
+    <li>Deleting an app always asks first, and never deletes the repo.</li>
+    <li>No emails yet, so no password reset. Comes with the online step.</li>
+  </ul>
+
+  <h2>What changes</h2>
+  <div class="scroll">
+    <table class="changes">
+      <thead><tr><th>What</th><th>Where</th><th>Why</th></tr></thead>
+      <tbody>
+        <tr><td>Appwrite on the Mac</td><td><code>infra/appwrite/</code></td><td>Accounts, database and files in one install, backed up nightly.</td></tr>
+        <tr><td>First test</td><td><code>docs/spikes/</code></td><td>Proves Claude can create projects before we build more.</td></tr>
+        <tr><td>Starter kit</td><td><code>templates/nextjs-appwrite/</code></td><td>Every app starts with sign-up, login and its own data per user.</td></tr>
+        <tr><td>"Create app" tool</td><td><code>mcp/</code></td><td>Claude creates, lists and deletes apps by itself.</td></tr>
+        <tr><td>Your apps</td><td><code>~/Programming/apps/</code></td><td>One folder and one repo per app.</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h2>What it looks like</h2>
+  <p>Nothing to draw yet. You use it from Claude Code. Your own panel gets wireframes in its own plan.</p>
+
+  <h2>The stages</h2>
+  <ol>
+    <li><b>Works on your Mac.</b> Install, test, starter kit, the tool, two test apps.</li>
+    <li><b>Online on Railway.</b> Links under your own subdomain, push to deploy, emails.</li>
+    <li><b>Name.</b> Your name on links, tool, emails and login pages.</li>
+    <li><b>Look.</b> Own panel: your apps, links, status, logs.</li>
+  </ol>
+
+  <h2>What it costs, and what could go wrong</h2>
+  <p><b>The Mac stage costs nothing.</b> Online on Railway lands around 300 to 550 kr a month for a handful of apps. An estimate until the Mac stage gives real numbers.</p>
+  <ul class="risks">
+    <li><b>The Mac runs short of space or memory.</b> <span>Docker capped at 8 GB, unused parts off, Appwrite stopped when idle.</span></li>
+    <li><b>Claude cannot create projects.</b> <span>About two minutes of clicks per app in Appwrite's admin. The rest stays automatic.</span></li>
+    <li><b>Docker is off after a restart.</b> <span>Turn on "Start Docker Desktop when you sign in" once.</span></li>
+    <li><b>An Appwrite update breaks things.</b> <span>Version pinned. Upgrades only on purpose.</span></li>
+  </ul>
+
+  <details>
+    <summary>How it is built <span class="hint">the detail, for whoever builds it</span></summary>
+    <ol>
+      <li>Install Appwrite 2.6.1, light setup, PostgreSQL, nightly backup.</li>
+      <li>Test creating a project from code.</li>
+      <li>Starter kit with server-side login, then Claude builds a todo app on it.</li>
+      <li>Bun MCP tool: create, list, delete. Then two proof apps.</li>
+    </ol>
+  </details>
+
+  <h2>Not in this</h2>
+  <ul>
+    <li>Other users, billing or teams.</li>
+    <li>A self-hosted Git server. GitHub stays.</li>
+    <li>Custom domains per app. Each app gets a subdomain.</li>
+    <li>Mobile apps.</li>
+  </ul>
+
+  <div class="decision">
+    <h2>The decision</h2>
+    <p>Railway runs the apps, Appwrite does accounts and data?</p>
+    <ol>
+      <li>Yes. I start on the Mac; you open Docker Desktop once.</li>
+      <li>No, keep everything in Appwrite: one rented server, about 620 kr a month with backups, more upkeep.</li>
+    </ol>
+  </div>
+
+</main>
+
+<script>
+/* /Users/ludvighedin/.claude/skills/plan/wireframe/fit.js */
+// Fit every wireframe into its column, and let a tap open one at full size.
+//
+// A 1280px desktop mockup inside a 390px screen is either a horizontal scroller
+// you have to pan blind, or a shrunk image you cannot read. This gives both:
+// scaled to fit by default, tap to switch to 1:1 with a scroller, tap again to
+// go back.
+//
+// Paste inline, at the end of the page. Artifacts allow inline scripts; the CSP
+// only blocks external hosts, so this needs no network and no library.
+//
+// Markup:  <div class="wf-fit"><figure class="wf wf-frame--desktop">...</figure></div>
+//          <div class="wf-fit"><div class="wf-stage"><figure class="wf">...</figure></div></div>
+//          <div class="wf-fit"><div class="wf-pair"><figure class="wf">..</figure> x2</div></div>
+//
+// Three things it depends on, each of which broke a build of this kit:
+//
+//   `zoom`, not `transform: scale()`. Zoom reflows the layout box, so the
+//   wrapper's height follows. A transform leaves the original height behind and
+//   every wireframe gets a gap under it.
+//
+//   ONE wrapper is scaled, never the frame itself. A fit box may hold a pair, a
+//   stage pad, or a labelled before/after. Scaling only the first `.wf` left
+//   everything beside it at full width, and that frame ran off the page.
+//
+//   The measurement is taken at `width: max-content`. A block child is already
+//   clamped to the box, so measuring it reports "fits" for content that is in
+//   fact clipped.
+
+(function () {
+  var INNER = "wf-fit__inner";
+
+  // One wrapper per fit box, created once, so zoom has a single target.
+  function inner(box) {
+    var el = box.firstElementChild;
+    if (el && el.classList.contains(INNER)) return el;
+    el = document.createElement("div");
+    el.className = INNER;
+    while (box.firstChild) el.appendChild(box.firstChild);
+    box.appendChild(el);
+    return el;
+  }
+
+  // The widest point of the box's content, measured from the frames themselves.
+  // `scrollWidth` alone under-reports a grid whose item hangs out of its track,
+  // which is exactly the case a fit box exists to catch.
+  function naturalWidth(el) {
+    var widest = el.scrollWidth;
+    var left = el.getBoundingClientRect().left;
+    var zoom = parseFloat(el.style.zoom) || 1;
+    el.querySelectorAll(".wf").forEach(function (frame) {
+      var r = frame.getBoundingClientRect();
+      var right = (r.right - left) / zoom;
+      // A frame may sit inside a padded stage, so give the pad back.
+      var stage = frame.parentElement;
+      if (stage && stage.classList.contains("wf-stage")) {
+        right += parseFloat(getComputedStyle(stage).paddingRight) || 0;
+      }
+      if (right > widest) widest = right;
+    });
+    return Math.ceil(widest);
+  }
+
+  function fit(box) {
+    var el = inner(box);
+    if (!el) return;
+
+    if (box.dataset.wfZoomed === "true") {
+      el.style.zoom = "";
+      el.style.width = "";
+      return;
+    }
+
+    el.style.zoom = "";
+    el.style.width = "";
+    var available = box.clientWidth;
+    var natural = naturalWidth(el);
+    if (!natural || !available) return;
+
+    if (natural <= available) {
+      box.dataset.wfScaled = "false";
+      return;
+    }
+
+    // One pixel of slack, then rounded DOWN. Browsers compute a zoomed layout
+    // box with sub-pixel rounding, and a scale that is mathematically exact
+    // still left a 1-2px scroller under every single mockup.
+    var scale = Math.floor(((available - 1) / natural) * 1000) / 1000;
+    el.style.width = natural + "px";
+    el.style.zoom = scale;
+
+    // Offer the tap only where it buys something. A phone frame on a phone
+    // lands around 0.85 and is already readable, so a badge there is noise on
+    // every mockup.
+    box.dataset.wfScaled = scale < 0.7 ? "true" : "false";
+  }
+
+  function all() {
+    document.querySelectorAll(".wf-fit").forEach(fit);
+  }
+
+  document.addEventListener("click", function (event) {
+    var box = event.target.closest && event.target.closest(".wf-fit");
+    // Only offer the toggle where it does something: a frame that already fits
+    // has nothing to zoom into.
+    if (!box || box.dataset.wfScaled !== "true") return;
+    box.dataset.wfZoomed = box.dataset.wfZoomed === "true" ? "false" : "true";
+    fit(box);
+  });
+
+  // Fonts land after first paint and change the natural width, so measure again.
+  if (document.fonts && document.fonts.ready) document.fonts.ready.then(all);
+  addEventListener("resize", all);
+  addEventListener("DOMContentLoaded", all);
+  all();
+})();
+
+</script>

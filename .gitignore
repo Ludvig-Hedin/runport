@@ -1,0 +1,12 @@
+node_modules/
+.next/
+.env
+.env.local
+.env.*.local
+.mcp.json
+infra/appwrite/appwrite/
+infra/appwrite/backups/
+mcp/logs/
+.claude/
+.DS_Store
+*.log
