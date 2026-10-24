@@ -4,11 +4,20 @@
 	admin off
 	auto_https off
 	servers {
+		# Railway's edge reaches us from a private address and appends the
+		# real client to X-Forwarded-For. Strict mode takes the right-most
+		# untrusted entry, so addresses a client adds itself are ignored.
 		trusted_proxies static private_ranges
+		trusted_proxies_strict
+		client_ip_headers X-Forwarded-For
 	}
 }
 
 :{$PORT:8080} {
+	# Appwrite reads the first X-Forwarded-For entry, so pass only the
+	# client address Caddy worked out above.
+	request_header X-Forwarded-For {client_ip}
+
 	handle /health {
 		respond "ok" 200
 	}

@@ -1,5 +1,5 @@
 import { readFileSync } from "node:fs";
-import { bucket, defineRailway, empty, image, project, ref, service, volume } from "railway/iac";
+import { bucket, defineRailway, image, project, ref, service, volume } from "railway/iac";
 
 // Sitedock on Railway: Appwrite 2.6.1 from its official images, the mail
 // gateway, a test inbox and one public router. Run through ../apply.sh,
@@ -7,7 +7,10 @@ import { bucket, defineRailway, empty, image, project, ref, service, volume } fr
 // never sit in this file or in the repo.
 
 const APPWRITE = "appwrite/appwrite:2.6.1";
-const REGION = { "europe-west4-drams3a": 1 };
+const REGION_ID = "europe-west4-drams3a"; // Amsterdam
+const REGION = { [REGION_ID]: 1 };
+/** Matches what Railway created, so plans stay clean. */
+const DISK = { region: REGION_ID, sizeMB: 50000 };
 
 const secret = (name: string): string => {
   const value = process.env[name];
@@ -62,7 +65,7 @@ export default defineRailway(() => {
       env: appwriteEnv,
     });
 
-  const postgresData = volume("postgresql-data");
+  const postgresData = volume("postgresql-data", DISK);
   const postgresql = service("postgresql", {
     source: image("appwrite/postgres:0.1.0"),
     replicas: REGION,
@@ -75,7 +78,7 @@ export default defineRailway(() => {
     },
   });
 
-  const redisData = volume("redis-data");
+  const redisData = volume("redis-data", DISK);
   const redis = service("redis", {
     source: image("redis:7.4.7-alpine"),
     start: "redis-server --maxmemory 512mb --maxmemory-policy allkeys-lru --maxmemory-samples 5",
@@ -83,9 +86,9 @@ export default defineRailway(() => {
     volumeMounts: { "redis-data": { mountPath: "/data" } },
   });
 
-  const clickhouseData = volume("clickhouse-data");
+  const clickhouseData = volume("clickhouse-data", DISK);
   const clickhouse = service("clickhouse", {
-    source: empty(), // built from infra/railway/clickhouse with `railway up`
+    // Built from infra/railway/clickhouse with `railway up`; no source here.
     replicas: REGION,
     volumeMounts: { "clickhouse-data": { mountPath: "/var/lib/clickhouse" } },
     env: {
@@ -105,9 +108,9 @@ export default defineRailway(() => {
     env: { PORT: "3000", VITE_APPWRITE_VERSION: "2.6.1" },
   });
 
-  const gatewayData = volume("mail-gateway-data");
+  const gatewayData = volume("mail-gateway-data", DISK);
   const mailGateway = service("mail-gateway", {
-    source: empty(), // built from infra/mail-gateway with `railway up`
+    // Built from infra/mail-gateway with `railway up`; no source here.
     replicas: REGION,
     volumeMounts: { "mail-gateway-data": { mountPath: "/data" } },
     env: {
@@ -132,7 +135,7 @@ export default defineRailway(() => {
   });
 
   const router = service("router", {
-    source: empty(), // built from infra/railway/router with `railway up`
+    // Built from infra/railway/router with `railway up`; no source here.
     replicas: REGION,
     healthcheck: "/health",
     domains: [],
