@@ -9,8 +9,12 @@ import addressparser from "nodemailer/lib/addressparser";
 export const APP_ID = /^[a-z0-9][a-z0-9-]{0,35}$/;
 export const SYSTEM_SENDER = "appwrite";
 
+// The system sender gets its own label, so no app id can derive its password
+// even if an app were named "appwrite".
 export const appPassword = (masterKey: string, app: string) =>
-  createHmac("sha256", masterKey).update(`mail-gateway:${app}`).digest("hex");
+  createHmac("sha256", masterKey)
+    .update(app === SYSTEM_SENDER ? "mail-gateway-system" : `mail-gateway:${app}`)
+    .digest("hex");
 
 export function passwordMatches(masterKey: string, app: string, given: string): boolean {
   const expected = Buffer.from(appPassword(masterKey, app));

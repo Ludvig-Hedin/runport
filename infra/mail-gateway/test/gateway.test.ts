@@ -1,4 +1,5 @@
 import { afterAll, beforeEach, describe, expect, test } from "bun:test";
+import { createHmac } from "node:crypto";
 import nodemailer, { type SendMailOptions } from "nodemailer";
 import type { Config } from "../src/config";
 import type { Envelope } from "../src/deliver";
@@ -166,6 +167,10 @@ describe("SMTP gateway", () => {
   test("refuses a wrong password", async () => {
     expect(await smtpCode(send("todo", ["a@x.com"], {}, "wrong"))).toBe(535);
     expect(delivered).toEqual([]);
+  });
+
+  test("an app's password never works for the system sender", async () => {
+    expect(appPassword("k", "appwrite")).not.toBe(createHmac("sha256", "k").update("mail-gateway:appwrite").digest("hex"));
   });
 
   test("one app's password does not work for another app", async () => {

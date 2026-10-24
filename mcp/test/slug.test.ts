@@ -17,6 +17,12 @@ describe("toSlug", () => {
     expect(slug.endsWith("-")).toBe(false);
   });
 
+  test("refuses names the platform uses for itself", () => {
+    expect(() => toSlug("Appwrite")).toThrow("reserved");
+    expect(() => toSlug("console")).toThrow("reserved");
+    expect(isValidSlug("appwrite")).toBe(false);
+  });
+
   test("rejects names that cannot start with a letter", () => {
     expect(() => toSlug("123")).toThrow();
     expect(() => toSlug("!!")).toThrow();

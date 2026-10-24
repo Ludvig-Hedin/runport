@@ -12,14 +12,18 @@ export function toSlug(name: string): string {
     .replace(/^-+|-+$/g, "")
     .slice(0, 36)
     .replace(/-+$/g, "");
+  if (RESERVED_SLUGS.has(slug)) throw new Error(`"${slug}" is reserved for the platform itself. Pick another app name.`);
   if (!isValidSlug(slug)) {
     throw new Error(`Cannot make a valid app id from "${name}". Use letters and numbers, starting with a letter.`);
   }
   return slug;
 }
 
+/** Ids the platform uses for itself: Appwrite's console project and the mail gateway's system sender. */
+export const RESERVED_SLUGS = new Set(["appwrite", "console", "sitedock", "system", "admin", "mail-gateway", "mailpit"]);
+
 export function isValidSlug(slug: string): boolean {
-  return /^[a-z][a-z0-9-]{1,35}$/.test(slug) && !slug.endsWith("-") && !slug.includes("--");
+  return /^[a-z][a-z0-9-]{1,35}$/.test(slug) && !slug.endsWith("-") && !slug.includes("--") && !RESERVED_SLUGS.has(slug);
 }
 
 /** Appwrite's own id rule: up to 36 chars of a-z A-Z 0-9 . - _, not starting with a symbol. */
