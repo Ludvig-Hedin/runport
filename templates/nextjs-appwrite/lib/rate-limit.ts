@@ -22,6 +22,12 @@ export function take(key: string, max: number, windowMs: number): boolean {
   return entry.count <= max;
 }
 
+/** True while the key is under its limit. Counts nothing. */
+export function peek(key: string, max: number): boolean {
+  const current = windows.get(key);
+  return !current || current.until <= Date.now() || current.count < max;
+}
+
 export function clear(key: string): void {
   windows.delete(key);
 }
@@ -45,16 +51,18 @@ export const LIMITS = {
   signIn: { email: [10, 15 * MINUTE], ip: [30, 15 * MINUTE] },
   signUp: { ip: [10, 60 * MINUTE] },
   reset: { email: [3, 60 * MINUTE], ip: [10, 60 * MINUTE] },
-  // "all" is shared by every visitor: if addresses are spoofed, the site
-  // password still cannot be guessed faster than this.
-  unlock: { ip: [10, 15 * MINUTE], all: [60, 15 * MINUTE] },
+  unlock: { ip: [10, 15 * MINUTE] },
 } as const;
+
+// Shared by every visitor, so the site password cannot be guessed faster than
+// this even with spoofed addresses. Only wrong passwords count, and only after
+// the visitor's own limit passed, so one visitor cannot lock out the others.
+export const UNLOCK_FAILURES = ["unlock:failures", 60, 15 * MINUTE] as const;
 
 /** True when both the email (if given) and the visitor address are under their limits. */
 export async function allowed(step: keyof typeof LIMITS, email?: string): Promise<boolean> {
-  const limits = LIMITS[step] as Partial<Record<"email" | "ip" | "all", readonly [number, number]>>;
+  const limits = LIMITS[step] as Partial<Record<"email" | "ip", readonly [number, number]>>;
   const checks: boolean[] = [];
-  if (limits.all) checks.push(take(`${step}:all`, ...limits.all));
   if (limits.ip) checks.push(take(`${step}:ip:${await clientIp()}`, ...limits.ip));
   if (limits.email && email) checks.push(take(`${step}:email:${email.toLowerCase()}`, ...limits.email));
   return checks.every(Boolean);

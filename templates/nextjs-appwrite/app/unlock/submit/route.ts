@@ -1,6 +1,6 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { sitePassword } from "@/lib/config";
-import { allowed } from "@/lib/rate-limit";
+import { UNLOCK_FAILURES, allowed, peek, take } from "@/lib/rate-limit";
 import { UNLOCK_MAX_AGE, safeEqual, safeNextPath, unlockCookieName, unlockToken } from "@/lib/site-lock";
 
 // The unlock form posts here, a plain route rather than a server action.
@@ -24,7 +24,7 @@ export async function POST(request: NextRequest) {
     return new NextResponse("Bad request", { status: 400 });
   }
   // Counted before reading the body, so floods cost as little as possible.
-  if (!(await allowed("unlock"))) return back(request, "/", "limited");
+  if (!(await allowed("unlock")) || !peek(UNLOCK_FAILURES[0], UNLOCK_FAILURES[1])) return back(request, "/", "limited");
   const form = new URLSearchParams((await request.text()).slice(0, MAX_BODY));
   const next = safeNextPath(form.get("next"));
   const expected = sitePassword();
@@ -33,7 +33,10 @@ export async function POST(request: NextRequest) {
   if (!password) return back(request, next, "empty");
   // Comparing the two HMACs keeps the check constant-time for any password length.
   const [given, wanted] = await Promise.all([unlockToken(password), unlockToken(expected)]);
-  if (!safeEqual(given, wanted)) return back(request, next, "wrong");
+  if (!safeEqual(given, wanted)) {
+    take(...UNLOCK_FAILURES);
+    return back(request, next, "wrong");
+  }
   const response = NextResponse.redirect(new URL(next, request.url), 303);
   response.cookies.set(unlockCookieName(), wanted, {
     path: "/",
