@@ -5,7 +5,7 @@ creates the app, its login, database, files and email in one step, and you
 own every part of it. Built so one person can run many small apps without
 Vercel, Clerk, Convex or Resend.
 
-> Status: early. Works on one Mac. Not online yet, see [What works](#what-works).
+> Status: early. Runs online on Railway with one test app. See [What works](#what-works).
 
 ## What you get
 
@@ -27,8 +27,8 @@ Vercel, Clerk, Convex or Resend.
 | Appwrite on your Mac, login, data per user, files | Works, tested end to end |
 | `create_app` MCP tool | Works locally |
 | Mail gateway with caps, local test inbox | Works locally, 31 tests |
-| Amazon SES delivery | Built, waiting for an AWS account |
-| Hosting online (Railway) | Not started |
+| Amazon SES delivery | Built, waiting for an AWS account; a protected test inbox meanwhile |
+| Hosting online (Railway) | Appwrite, mail gateway and one app online, tested end to end |
 | Own admin panel | Not started; Appwrite's admin is used meanwhile |
 | Backups | Not started |
 

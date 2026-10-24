@@ -11,7 +11,7 @@ export const config = {
   templateDir: join(repoRoot, "templates", "nextjs-appwrite"),
   logFile: join(repoRoot, "mcp", "logs", "actions.log"),
   /** macOS Keychain service that holds the Appwrite owner login. */
-  keychainService: "builder-platform",
+  keychainService: process.env.PLATFORM_KEYCHAIN_SERVICE ?? "builder-platform",
   /** Apps send as <slug>@<mailDomain> through the mail gateway (infra/mail-gateway). */
   mailDomain: process.env.PLATFORM_MAIL_DOMAIN ?? "apps.ludvighedin.com",
   /** The gateway as Appwrite reaches it on its internal network. */
