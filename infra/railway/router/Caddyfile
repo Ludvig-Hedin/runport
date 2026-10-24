@@ -31,6 +31,11 @@
 		reverse_proxy appwrite.railway.internal:80
 	}
 	handle {
-		reverse_proxy appwrite-console.railway.internal:3000
+		# The admin sleeps when idle; keep retrying while it wakes so the
+		# first visit loads slowly instead of showing an error.
+		reverse_proxy appwrite-console.railway.internal:3000 {
+			lb_try_duration 30s
+			lb_try_interval 1s
+		}
 	}
 }
