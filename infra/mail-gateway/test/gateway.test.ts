@@ -105,6 +105,17 @@ describe("headerFrom", () => {
     expect(headerFrom(msg('From: "security@bank.com" <todo@apps.example.com>'))).toBeNull();
     expect(headerFrom(msg("From: <todo@apps.example.com> security@bank.com"))).toBeNull();
   });
+  test("rejects lookalike and encoded addresses in the display name", () => {
+    expect(headerFrom(msg("From: =?UTF-8?B?c2VjdXJpdHlAYmFuay5jb20=?= <todo@apps.example.com>"))).toBeNull();
+    expect(headerFrom(msg("From: =?UTF-8?Q?security=40bank.com?= <todo@apps.example.com>"))).toBeNull();
+    expect(headerFrom(msg("From: security\uFF20bank.com <todo@apps.example.com>"))).toBeNull();
+    expect(headerFrom(msg("From: security\uFE6Bbank.com <todo@apps.example.com>"))).toBeNull();
+    expect(headerFrom(msg("From: =?x-unknown?B?YQ==?= <todo@apps.example.com>"))).toBeNull();
+  });
+  test("keeps ordinary non-English names", () => {
+    expect(headerFrom(msg("From: =?UTF-8?Q?=C3=85sas_Caf=C3=A9?= <todo@apps.example.com>"))).toBe("todo@apps.example.com");
+    expect(headerFrom(msg("From: \u00C5sas Caf\u00E9 <todo@apps.example.com>"))).toBe("todo@apps.example.com");
+  });
   test("rejects groups, bare line breaks and space before the colon", () => {
     expect(headerFrom(msg("From: team: todo@apps.example.com;"))).toBeNull();
     expect(headerFrom(msg("From: todo@apps.example.com\nFrom: security@bank.com"))).toBeNull();

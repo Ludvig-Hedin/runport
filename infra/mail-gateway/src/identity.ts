@@ -33,6 +33,39 @@ export function senderProblem(app: string, address: string, allowedDomains: stri
 }
 
 /**
+ * Decodes RFC 2047 encoded words ("=?UTF-8?B?...?=") the way mail clients do.
+ * Returns null for a charset or encoding we cannot decode, so the caller
+ * refuses instead of guessing.
+ */
+export function decodeWords(value: string): string | null {
+  let failed = false;
+  const decoded = value.replace(/=\?([^?\s]+)\?([BbQq])\?([^?\s]*)\?=/g, (_m, charset: string, enc: string, text: string) => {
+    try {
+      const bytes =
+        enc.toUpperCase() === "B"
+          ? Buffer.from(text, "base64")
+          : Buffer.from(
+              text.replace(/_/g, " ").replace(/=([0-9A-Fa-f]{2})/g, (_h, hex: string) => String.fromCharCode(Number.parseInt(hex, 16))),
+              "latin1",
+            );
+      return new TextDecoder(charset.split("*")[0], { fatal: true }).decode(bytes);
+    } catch {
+      failed = true;
+      return "";
+    }
+  });
+  return failed ? null : decoded;
+}
+
+/** True when a display name could pass for an address, including lookalike "@" characters. */
+export function looksLikeAddress(name: string): boolean {
+  const decoded = decodeWords(name);
+  if (decoded === null) return true;
+  // NFKC turns fullwidth and small "@" (U+FF20, U+FE6B) into a plain "@".
+  return decoded.normalize("NFKC").includes("@");
+}
+
+/**
  * The single sender address the message shows, or null when it is missing,
  * ambiguous or written in a way mail clients might read differently than we
  * do. Strict on purpose: refusing an odd email is cheaper than letting one
@@ -40,7 +73,8 @@ export function senderProblem(app: string, address: string, allowedDomains: stri
  */
 export function headerFrom(raw: Buffer): string | null {
   const end = raw.indexOf("\r\n\r\n");
-  const head = raw.subarray(0, end === -1 ? raw.length : end).toString("latin1");
+  // UTF-8 so 8-bit names decode to the characters a client would show.
+  const head = raw.subarray(0, end === -1 ? raw.length : end).toString("utf8");
   // Bare CR or LF can hide a header from us that a client still reads.
   if (/[\r\n]/.test(head.replace(/\r\n/g, ""))) return null;
   const lines = head.replace(/\r\n[ \t]+/g, " ").split("\r\n");
@@ -53,7 +87,7 @@ export function headerFrom(raw: Buffer): string | null {
   const parsed = addressparser(from[0]);
   if (parsed.length !== 1 || "group" in parsed[0] || !parsed[0].address?.includes("@")) return null;
   // A display name that looks like an address is how lookalike senders work.
-  if (parsed[0].name?.includes("@")) return null;
+  if (looksLikeAddress(parsed[0].name ?? "")) return null;
   const address = parsed[0].address.toLowerCase();
 
   // Sender, when present, overrides From in some clients. Allow it only if equal.
