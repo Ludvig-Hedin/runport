@@ -26,9 +26,11 @@ export async function proxy(request: NextRequest) {
   const password = sitePassword();
   const { pathname, search } = request.nextUrl;
   const locked = password ? !(await isUnlocked(request, password)) : false;
-  // Server actions can be posted to any path, the open ones included, so a
-  // locked site refuses them all. The unlock form uses a plain route instead.
-  if (locked && request.headers.has("next-action")) {
+  // Server actions can be posted to any path, the open ones included, with or
+  // without a Next-Action header (plain forms carry the action in the body).
+  // So a locked site only serves reads, plus the unlock form's own route.
+  const reading = request.method === "GET" || request.method === "HEAD";
+  if (locked && !reading && pathname !== "/unlock/submit") {
     return withRobots(new NextResponse("Locked", { status: 403 }));
   }
   if (locked && !isOpen(pathname)) {

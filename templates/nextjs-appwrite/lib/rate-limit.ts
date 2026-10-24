@@ -45,13 +45,16 @@ export const LIMITS = {
   signIn: { email: [10, 15 * MINUTE], ip: [30, 15 * MINUTE] },
   signUp: { ip: [10, 60 * MINUTE] },
   reset: { email: [3, 60 * MINUTE], ip: [10, 60 * MINUTE] },
-  unlock: { ip: [10, 15 * MINUTE] },
+  // "all" is shared by every visitor: if addresses are spoofed, the site
+  // password still cannot be guessed faster than this.
+  unlock: { ip: [10, 15 * MINUTE], all: [60, 15 * MINUTE] },
 } as const;
 
 /** True when both the email (if given) and the visitor address are under their limits. */
 export async function allowed(step: keyof typeof LIMITS, email?: string): Promise<boolean> {
-  const limits = LIMITS[step] as Partial<Record<"email" | "ip", readonly [number, number]>>;
+  const limits = LIMITS[step] as Partial<Record<"email" | "ip" | "all", readonly [number, number]>>;
   const checks: boolean[] = [];
+  if (limits.all) checks.push(take(`${step}:all`, ...limits.all));
   if (limits.ip) checks.push(take(`${step}:ip:${await clientIp()}`, ...limits.ip));
   if (limits.email && email) checks.push(take(`${step}:email:${email.toLowerCase()}`, ...limits.email));
   return checks.every(Boolean);

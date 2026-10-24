@@ -14,14 +14,23 @@ const back = (request: NextRequest, next: string, error?: string) => {
   return NextResponse.redirect(url, 303);
 };
 
+// A password and a return path fit easily; anything larger is not our form.
+const MAX_BODY = 4096;
+
 export async function POST(request: NextRequest) {
-  const form = await request.formData();
-  const next = safeNextPath(String(form.get("next") ?? ""));
+  const length = Number(request.headers.get("content-length"));
+  const urlencoded = request.headers.get("content-type")?.startsWith("application/x-www-form-urlencoded");
+  if (!urlencoded || !Number.isFinite(length) || length <= 0 || length > MAX_BODY) {
+    return new NextResponse("Bad request", { status: 400 });
+  }
+  // Counted before reading the body, so floods cost as little as possible.
+  if (!(await allowed("unlock"))) return back(request, "/", "limited");
+  const form = new URLSearchParams((await request.text()).slice(0, MAX_BODY));
+  const next = safeNextPath(form.get("next"));
   const expected = sitePassword();
   if (!expected) return NextResponse.redirect(new URL(next, request.url), 303);
-  const password = String(form.get("password") ?? "");
+  const password = form.get("password") ?? "";
   if (!password) return back(request, next, "empty");
-  if (!(await allowed("unlock"))) return back(request, next, "limited");
   // Comparing the two HMACs keeps the check constant-time for any password length.
   const [given, wanted] = await Promise.all([unlockToken(password), unlockToken(expected)]);
   if (!safeEqual(given, wanted)) return back(request, next, "wrong");
