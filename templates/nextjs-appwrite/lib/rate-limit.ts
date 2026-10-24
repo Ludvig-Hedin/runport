@@ -22,10 +22,10 @@ export function take(key: string, max: number, windowMs: number): boolean {
   return entry.count <= max;
 }
 
-/** True while the key is under its limit. Counts nothing. */
-export function peek(key: string, max: number): boolean {
+/** Gives back one counted attempt, for example after a correct password. */
+export function release(key: string): void {
   const current = windows.get(key);
-  return !current || current.until <= Date.now() || current.count < max;
+  if (current && current.count > 0) current.count -= 1;
 }
 
 export function clear(key: string): void {
@@ -55,8 +55,9 @@ export const LIMITS = {
 } as const;
 
 // Shared by every visitor, so the site password cannot be guessed faster than
-// this even with spoofed addresses. Only wrong passwords count, and only after
-// the visitor's own limit passed, so one visitor cannot lock out the others.
+// this even with spoofed addresses. A slot is taken before the check, with no
+// await in between, and given back on a correct password, so only wrong
+// passwords use it up and parallel guesses cannot slip past.
 export const UNLOCK_FAILURES = ["unlock:failures", 60, 15 * MINUTE] as const;
 
 /** True when both the email (if given) and the visitor address are under their limits. */
