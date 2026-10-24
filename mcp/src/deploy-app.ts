@@ -1,6 +1,6 @@
 // Puts an app from ~/Programming/apps online: an Appwrite project on the
-// online Sitedock, then a Railway project for the app itself.
-// Run: PLATFORM_KEYCHAIN_SERVICE=sitedock-prod PLATFORM_APPWRITE_ENDPOINT=https://<sitedock>/v1 bun src/deploy-app.ts <slug>
+// online Runport, then a Railway project for the app itself.
+// Run: PLATFORM_KEYCHAIN_SERVICE=runport-prod PLATFORM_APPWRITE_ENDPOINT=https://<runport>/v1 bun src/deploy-app.ts <slug>
 // Safe to rerun: each step checks what exists first.
 import { join } from "node:path";
 import { AppwriteAdmin } from "./appwrite-admin";
@@ -34,7 +34,7 @@ const domainOut = JSON.parse(await railway(["domain", "--service", "web", "--jso
 const domain = new URL(domainOut.domain ?? domainOut.domains?.[0] ?? "").host;
 console.log(`app address: https://${domain}`);
 
-// 2. Appwrite project on the online Sitedock.
+// 2. Appwrite project on the online Runport.
 if (!(await admin.getProject(slug))) await admin.createProject(slug, app.name);
 await admin.addWebPlatform(slug, domain);
 const masterKey = await readSecret("mail-gateway-master-key");

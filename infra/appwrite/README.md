@@ -25,9 +25,9 @@ reset"), restart the proxy: `docker compose restart traefik`.
 Appwrite sends all mail through `../mail-gateway` (daily caps). Locally it
 lands in the test inbox at http://localhost:8025 and never leaves the Mac.
 
-## Owner login for the Sitedock tool
+## Owner login for the Runport tool
 
-The owner account exists (created 2026-10-24) and the `sitedock` MCP tool logs
+The owner account exists (created 2026-10-24) and the `runport` MCP tool logs
 in with it. Email and password are in the Keychain, accounts
 `appwrite-owner-email` and `appwrite-owner-password`. To sign in to the admin
 screen, copy the password:
@@ -42,7 +42,7 @@ nothing outside this Mac reaches Appwrite.
 ## Admin colours
 
 The admin runs our own build of the console image
-(`sitedock/console:1.2.97-theme`, from `console-theme/`). It swaps the
+(`runport/console:1.2.97-theme`, from `console-theme/`). It swaps the
 Appwrite pinks for blue, makes the dark mode greys neutral and shows section
 labels in sentence case. `docker-compose.override.yml` points the
 `appwrite-console` service at it. Changed files get new names, so browsers

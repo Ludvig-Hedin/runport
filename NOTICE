@@ -1,13 +1,13 @@
-Sitedock
+Runport
 Copyright (c) 2026 Ludvig Hedin. Licensed under the MIT License (see LICENSE).
 
-Sitedock is not affiliated with or endorsed by Appwrite Code Ltd.
+Runport is not affiliated with or endorsed by Appwrite Code Ltd.
 "Appwrite" is a trademark of Appwrite Code Ltd. and is used here only to say
-which software Sitedock runs on.
+which software Runport runs on.
 
 Third-party software
 --------------------
-Sitedock does not include or redistribute the source code below. It starts
+Runport does not include or redistribute the source code below. It starts
 these projects from their official, unmodified Docker images or installs them
 as npm packages, under their own licenses:
 
@@ -15,7 +15,7 @@ as npm packages, under their own licenses:
 - Appwrite console image (appwrite/new), distributed by Appwrite with its
   self-hosted installer. Its source and license are not published.
   infra/appwrite/console-theme changes colours in a copy built on your own
-  machine for your own use. Sitedock never publishes or deploys that image.
+  machine for your own use. Runport never publishes or deploys that image.
 - Mailpit (https://github.com/axllent/mailpit), MIT. Local test inbox only.
 - smtp-server and nodemailer (https://nodemailer.com), MIT-0.
 - AWS SDK for JavaScript v3 (https://github.com/aws/aws-sdk-js-v3), Apache-2.0.

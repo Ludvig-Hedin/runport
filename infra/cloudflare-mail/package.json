@@ -1,5 +1,5 @@
 {
-  "name": "sitedock-mail",
+  "name": "runport-mail",
   "private": true,
   "type": "module",
   "devDependencies": {

@@ -1,4 +1,4 @@
-<p><img src="brand/logo.svg" alt="Sitedock" height="48"></p>
+<p><img src="brand/logo.svg" alt="Runport" height="48"></p>
 
 Your own home for web apps and websites. An AI agent (Claude Code, Codex)
 creates the app, its login, database, files and email in one step, and you
@@ -18,7 +18,7 @@ Vercel, Clerk, Convex or Resend.
   need.
 - **Websites too:** any Next.js site, with a password lock and search engine
   indexing off until you turn it on.
-- **Agent first:** an MCP tool (`sitedock`) creates an app, its project, keys,
+- **Agent first:** an MCP tool (`runport`) creates an app, its project, keys,
   mail sender, private GitHub repo and local copy in one call.
 
 ## What works
@@ -42,7 +42,7 @@ infra/appwrite/      Appwrite setup and local overrides
 infra/mail-gateway/  SMTP gateway: caps, sender checks, then Cloudflare
 infra/cloudflare-mail/ Worker that sends the gateway's mail with Cloudflare
 infra/railway/       the online setup as code, backup and outage jobs
-mcp/                 sitedock MCP server (Bun, TypeScript)
+mcp/                 runport MCP server (Bun, TypeScript)
 templates/           Next.js starter kit copied into each new app
 docs/                plans, research and spike results
 brand/               logo
@@ -53,4 +53,4 @@ Start with [infra/appwrite/README.md](infra/appwrite/README.md).
 ## License
 
 MIT, see [LICENSE](LICENSE). Third-party software and trademarks are listed in
-[NOTICE](NOTICE). Sitedock is not affiliated with Appwrite.
+[NOTICE](NOTICE). Runport is not affiliated with Appwrite.

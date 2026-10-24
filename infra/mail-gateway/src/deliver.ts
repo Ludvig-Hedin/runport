@@ -1,7 +1,7 @@
 import { SESv2Client, SendEmailCommand } from "@aws-sdk/client-sesv2";
 import nodemailer from "nodemailer";
 
-// Where accepted mail goes next. "cloudflare" posts it to the sitedock-mail
+// Where accepted mail goes next. "cloudflare" posts it to the runport-mail
 // Worker (infra/cloudflare-mail), which sends it with Cloudflare Email
 // Sending. "ses" sends through Amazon SES. Both use HTTPS, so they work on
 // hosts that block outgoing SMTP. "smtp" forwards to another SMTP server,

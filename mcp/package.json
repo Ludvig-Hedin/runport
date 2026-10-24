@@ -1,8 +1,8 @@
 {
-  "name": "sitedock-mcp",
+  "name": "runport-mcp",
   "private": true,
   "type": "module",
-  "bin": { "sitedock-mcp": "src/index.ts" },
+  "bin": { "runport-mcp": "src/index.ts" },
   "scripts": {
     "start": "bun src/index.ts",
     "test": "bun test",

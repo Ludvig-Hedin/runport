@@ -29,7 +29,7 @@ export function createSmtpServer(config: Config, limits: Limits, deliver: Delive
     allowInsecureAuth: true,
     authMethods: ["PLAIN", "LOGIN"],
     size: config.maxBytes,
-    banner: "Sitedock mail gateway",
+    banner: "Runport mail gateway",
     logger: false,
 
     onAuth(auth, _session, callback) {

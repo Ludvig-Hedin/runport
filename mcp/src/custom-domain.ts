@@ -3,7 +3,7 @@
 // Run from anywhere:
 //   bun src/custom-domain.ts <domain> <service> <port> <railway-linked folder>
 // Needs a Cloudflare API token with "Edit zone DNS" for the zone, stored once:
-//   security add-generic-password -s sitedock-prod -a cloudflare-dns-token -w
+//   security add-generic-password -s runport-prod -a cloudflare-dns-token -w
 // Without it the records are printed so they can be added by hand.
 // Safe to rerun: existing records with the right value are left alone.
 
@@ -24,7 +24,7 @@ async function railway(args: string[]): Promise<string> {
 }
 
 async function keychain(account: string): Promise<string | null> {
-  const proc = Bun.spawn(["security", "find-generic-password", "-s", "sitedock-prod", "-a", account, "-w"], { stdout: "pipe", stderr: "ignore" });
+  const proc = Bun.spawn(["security", "find-generic-password", "-s", "runport-prod", "-a", account, "-w"], { stdout: "pipe", stderr: "ignore" });
   const out = (await new Response(proc.stdout).text()).trim();
   return (await proc.exited) === 0 && out ? out : null;
 }

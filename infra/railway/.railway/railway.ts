@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { bucket, defineRailway, image, project, ref, service, volume } from "railway/iac";
 
-// Sitedock on Railway: Appwrite 2.6.1 from its official images, the mail
+// Runport on Railway: Appwrite 2.6.1 from its official images, the mail
 // gateway (delivering through Cloudflare, infra/cloudflare-mail) and one
 // public router. Usage statistics are off, so there is no ClickHouse. Run through ../apply.sh,
 // which reads the secrets from the macOS Keychain into SD_* variables so they
@@ -110,7 +110,7 @@ export default defineRailway(() => {
     env: {
       GATEWAY_MASTER_KEY: secret("SD_MAIL_MASTER_KEY"),
       DELIVERY: "cloudflare",
-      CLOUDFLARE_MAIL_URL: "https://sitedock-mail.ludvighedin15.workers.dev/",
+      CLOUDFLARE_MAIL_URL: "https://runport-mail.ludvighedin15.workers.dev/",
       CLOUDFLARE_MAIL_TOKEN: secret("SD_CF_MAIL_TOKEN"),
       MAIL_DAILY_LIMIT: "1000",
       MAIL_APP_DAILY_LIMIT: "300",
@@ -134,7 +134,7 @@ export default defineRailway(() => {
     S3_BUCKET: ref(files, "BUCKET"),
     S3_ENDPOINT: ref(files, "ENDPOINT"),
     S3_REGION: ref(files, "REGION"),
-    CLOUDFLARE_MAIL_URL: "https://sitedock-mail.ludvighedin15.workers.dev/",
+    CLOUDFLARE_MAIL_URL: "https://runport-mail.ludvighedin15.workers.dev/",
     CLOUDFLARE_MAIL_TOKEN: secret("SD_CF_MAIL_TOKEN"),
     ALERT_TO: "ludvig@ludvighedin.com",
   };
@@ -158,7 +158,7 @@ export default defineRailway(() => {
     env: { ...opsEnv, ALERT_EVERY_HOURS: "3" },
   });
 
-  return project("sitedock", {
+  return project("runport", {
     resources: [
       files,
       postgresData,

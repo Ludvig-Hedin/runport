@@ -20,7 +20,7 @@ export function toSlug(name: string): string {
 }
 
 /** Ids the platform uses for itself: Appwrite's console project and the mail gateway's system sender. */
-export const RESERVED_SLUGS = new Set(["appwrite", "console", "sitedock", "system", "admin", "mail-gateway", "mailpit"]);
+export const RESERVED_SLUGS = new Set(["appwrite", "console", "runport", "sitedock", "system", "admin", "mail-gateway", "mailpit"]);
 
 export function isValidSlug(slug: string): boolean {
   return /^[a-z][a-z0-9-]{1,35}$/.test(slug) && !slug.endsWith("-") && !slug.includes("--") && !RESERVED_SLUGS.has(slug);

@@ -3,7 +3,7 @@
   "configVersion": 1,
   "workspaces": {
     "": {
-      "name": "sitedock-mail",
+      "name": "runport-mail",
       "devDependencies": {
         "@cloudflare/workers-types": "^5.20261024.1",
         "typescript": "^7.0.2",

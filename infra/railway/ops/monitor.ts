@@ -41,13 +41,13 @@ for (const [name, check] of Object.entries(checks)) {
   if (problem) {
     const entry = known ?? { failingSince: now, lastAlert: 0 };
     if (now - entry.lastAlert >= ALERT_EVERY_MS) {
-      await alertOwner(`Sitedock: ${name} is down`, `${name}: ${problem}\nFailing since ${new Date(entry.failingSince).toISOString()}.\n`);
+      await alertOwner(`Runport: ${name} is down`, `${name}: ${problem}\nFailing since ${new Date(entry.failingSince).toISOString()}.\n`);
       entry.lastAlert = now;
     }
     state[name] = entry;
     console.log(JSON.stringify({ check: name, result: "failing", problem }));
   } else if (known) {
-    if (known.lastAlert) await alertOwner(`Sitedock: ${name} is back`, `${name} works again.\n`);
+    if (known.lastAlert) await alertOwner(`Runport: ${name} is back`, `${name} works again.\n`);
     delete state[name];
   }
 }

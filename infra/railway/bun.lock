@@ -3,7 +3,7 @@
   "configVersion": 1,
   "workspaces": {
     "": {
-      "name": "sitedock-railway",
+      "name": "runport-railway",
       "dependencies": {
         "railway": "^3.16.0",
       },

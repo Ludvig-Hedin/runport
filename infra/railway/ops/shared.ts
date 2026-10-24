@@ -24,7 +24,7 @@ export async function alertOwner(subject: string, text: string): Promise<void> {
   const from = "alerts@runport.app";
   const to = required("ALERT_TO");
   const raw = [
-    `From: Sitedock <${from}>`,
+    `From: Runport <${from}>`,
     `To: ${to}`,
     `Subject: ${subject}`,
     `Message-ID: <${crypto.randomUUID()}@runport.app>`,

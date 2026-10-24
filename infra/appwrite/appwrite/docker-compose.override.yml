@@ -1,4 +1,4 @@
-# Local trims for Sitedock (see ../README.md). Leaves the generated
+# Local trims for Runport (see ../README.md). Leaves the generated
 # docker-compose.yml untouched. These services are not used in stage 1:
 # screenshots, AI embeddings, and Appwrite's own hosting (Railway runs apps).
 services:
@@ -10,10 +10,10 @@ services:
     profiles: ["unused"]
   orchestrator:
     profiles: ["unused"]
-  # Admin with Sitedock colours (../console-theme). Rebuild with:
+  # Admin with Runport colours (../console-theme). Rebuild with:
   # docker compose build appwrite-console
   appwrite-console:
-    image: sitedock/console:1.2.97-theme
+    image: runport/console:1.2.97-theme
     build:
       context: ../console-theme
       args:
@@ -22,7 +22,7 @@ services:
   # Every email goes through the gateway (infra/mail-gateway): daily caps, then
   # Amazon SES, or the local test inbox while DELIVERY=smtp.
   mail-gateway:
-    image: sitedock/mail-gateway:local
+    image: runport/mail-gateway:local
     build: ../../mail-gateway
     container_name: appwrite-mail-gateway
     restart: unless-stopped

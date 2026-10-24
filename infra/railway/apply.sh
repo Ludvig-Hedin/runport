@@ -1,10 +1,10 @@
 #!/bin/bash
-# Plans or applies Sitedock's Railway project (.railway/railway.ts).
-# Secrets live in the macOS Keychain (service "sitedock-prod"); missing ones
+# Plans or applies Runport's Railway project (.railway/railway.ts).
+# Secrets live in the macOS Keychain (service "runport-prod"); missing ones
 # are generated once. Usage: ./apply.sh plan | ./apply.sh apply
 set -euo pipefail
 cd "$(dirname "$0")"
-SERVICE=sitedock-prod
+SERVICE=runport-prod
 
 get() { security find-generic-password -s "$SERVICE" -a "$1" -w 2>/dev/null; }
 ensure() {

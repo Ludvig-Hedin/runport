@@ -32,6 +32,6 @@ try {
   console.log(JSON.stringify({ result: "backup ok", key, bytes: size }));
 } catch (error) {
   console.error(JSON.stringify({ result: "backup failed", reason: (error as Error).message }));
-  await alertOwner("Sitedock: nightly backup failed", `The database backup for ${day} did not finish.\n\n${(error as Error).message}\n`).catch(() => {});
+  await alertOwner("Runport: nightly backup failed", `The database backup for ${day} did not finish.\n\n${(error as Error).message}\n`).catch(() => {});
   process.exit(1);
 }
