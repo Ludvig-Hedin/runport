@@ -1,0 +1,24 @@
+
+/* builder-platform theme (infra/appwrite/console-theme). */
+html:not(.dark) {
+  --chart-brand: oklch(0.55 0.2 264);
+}
+
+html.dark {
+  --foreground: oklch(0.985 0 0);
+  --primary-foreground: oklch(0.21 0 0);
+  --muted-foreground: oklch(0.705 0 0);
+  --border: oklch(0.252 0 0);
+  --ring: oklch(0.448 0 0);
+  --chart-brand: oklch(0.6 0.2 264);
+}
+
+/* Section labels and eyebrows in sentence case. */
+.uppercase {
+  text-transform: none;
+}
+.uppercase.tracking-wide,
+.uppercase.tracking-wider,
+.uppercase.tracking-widest {
+  letter-spacing: normal;
+}

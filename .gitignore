@@ -4,9 +4,12 @@ node_modules/
 .env.local
 .env.*.local
 .mcp.json
-infra/appwrite/appwrite/
+infra/appwrite/appwrite/*
+!infra/appwrite/appwrite/docker-compose.override.yml
 infra/appwrite/backups/
 mcp/logs/
 .claude/
 .DS_Store
 *.log
+.scratch/
+.playwright-mcp/

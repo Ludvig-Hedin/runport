@@ -1,0 +1,20 @@
+# Local trims for builder-platform (see ../README.md). Leaves the generated
+# docker-compose.yml untouched. These services are not used in stage 1:
+# screenshots, AI embeddings, and Appwrite's own hosting (Railway runs apps).
+services:
+  appwrite-browser:
+    profiles: ["unused"]
+  appwrite-embedding:
+    profiles: ["unused"]
+  openruntimes-executor:
+    profiles: ["unused"]
+  orchestrator:
+    profiles: ["unused"]
+  # Admin with builder-platform colours (../console-theme). Rebuild with:
+  # docker compose build appwrite-console
+  appwrite-console:
+    image: builder-platform/console:1.2.97-theme
+    build:
+      context: ../console-theme
+      args:
+        BASE: appwrite/new:1.2.97-self-hosted

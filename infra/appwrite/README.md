@@ -31,6 +31,23 @@ security find-generic-password -s builder-platform -a appwrite-owner-password -w
 All published ports, MQTT included, are bound to `127.0.0.1` in `.env`, so
 nothing outside this Mac reaches Appwrite.
 
+## Admin colours
+
+The admin runs our own build of the console image
+(`builder-platform/console:1.2.97-theme`, from `console-theme/`). It swaps the
+Appwrite pinks for blue, makes the dark mode greys neutral and shows section
+labels in sentence case. `docker-compose.override.yml` points the
+`appwrite-console` service at it. Changed files get new names, so browsers
+fetch them fresh instead of keeping the old colours.
+
+```bash
+cd infra/appwrite/appwrite
+docker compose build appwrite-console && docker compose up -d appwrite-console
+```
+
+When upgrading the console image, change `BASE` and the tag in the override.
+`patch.ts` stops the build if the main stylesheet is no longer found.
+
 ## Upgrade
 
 Only on purpose, after `bun run spike` and the end-to-end check pass on the new
