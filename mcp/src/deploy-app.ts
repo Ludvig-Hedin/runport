@@ -87,7 +87,8 @@ if ((await setup.exited) !== 0) throw new Error(`Table setup failed: ${await new
 console.log("tables ready");
 
 // 4. App settings on Railway, then deploy the folder.
-const vars = { APPWRITE_ENDPOINT: config.endpoint, APPWRITE_PROJECT_ID: slug, APPWRITE_API_KEY: key, APP_URL: `https://${domain}`, PORT: String(app.port) };
+// Telemetry off, so an idle app sends nothing out and Railway can put it to sleep.
+const vars = { APPWRITE_ENDPOINT: config.endpoint, APPWRITE_PROJECT_ID: slug, APPWRITE_API_KEY: key, APP_URL: `https://${domain}`, PORT: String(app.port), NEXT_TELEMETRY_DISABLED: "1" };
 await railway(["variables", "--service", "web", "--skip-deploys", ...Object.entries(vars).flatMap(([k, v]) => ["--set", `${k}=${v}`])]);
 await railway(["up", join(app.folder), "--path-as-root", "--service", "web", "--detach"]);
 console.log("deploy started");

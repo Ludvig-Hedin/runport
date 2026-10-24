@@ -1,8 +1,8 @@
 # Runport on Railway
 
 Project `runport` (Amsterdam). Public entry: the `router` service
-(https://router-production-146b.up.railway.app, later
-https://admin.runport.app): `/v1` is the Appwrite API, everything
+at https://admin.runport.app (also
+https://router-production-146b.up.railway.app): `/v1` is the Appwrite API, everything
 else the admin. The admin sleeps when idle; the router waits for it to wake.
 
 - `.railway/railway.ts` describes every service, volume and the file bucket.
@@ -27,11 +27,13 @@ else the admin. The admin sleeps when idle; the router waits for it to wake.
   `owner-password`.
 - Own addresses: `bun mcp/src/custom-domain.ts <domain> <service> <port>
   <folder>` registers the domain on Railway and creates its DNS records with
-  the Keychain item `cloudflare-dns-token` (or prints them).
+  the Keychain item `cloudflare-dns-token`. Without the token it stops
+  before registering, because certificate attempts before DNS exists lock
+  the name out at Let's Encrypt for an hour or more.
 - The encryption key (`openssl-key`) makes stored data readable. Losing it
   loses the data. Back it up outside this Mac.
 
 Put an app online: `PLATFORM_KEYCHAIN_SERVICE=runport-prod
-PLATFORM_APPWRITE_ENDPOINT=https://router-production-146b.up.railway.app/v1
+PLATFORM_APPWRITE_ENDPOINT=https://admin.runport.app/v1
 bun mcp/src/deploy-app.ts <slug>`. Each app gets its own Railway project, so
 `apply.sh` never touches apps.
