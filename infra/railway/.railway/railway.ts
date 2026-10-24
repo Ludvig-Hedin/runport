@@ -125,7 +125,37 @@ export default defineRailway(() => {
     // Built from infra/railway/router with `railway up`; no source here.
     replicas: REGION,
     healthcheck: "/health",
-    domains: [],
+  });
+
+  // Scheduled jobs from infra/railway/ops (deployed with `railway up`).
+  const opsEnv = {
+    S3_ACCESS_KEY_ID: ref(files, "ACCESS_KEY_ID"),
+    S3_SECRET_ACCESS_KEY: ref(files, "SECRET_ACCESS_KEY"),
+    S3_BUCKET: ref(files, "BUCKET"),
+    S3_ENDPOINT: ref(files, "ENDPOINT"),
+    S3_REGION: ref(files, "REGION"),
+    CLOUDFLARE_MAIL_URL: "https://sitedock-mail.ludvighedin15.workers.dev/",
+    CLOUDFLARE_MAIL_TOKEN: secret("SD_CF_MAIL_TOKEN"),
+    ALERT_TO: "ludvig@ludvighedin.com",
+  };
+  const backup = service("backup", {
+    replicas: REGION,
+    start: "bun backup.ts",
+    deploy: { cronSchedule: "0 1 * * *", restartPolicyType: "NEVER" },
+    env: {
+      ...opsEnv,
+      PGHOST: "postgresql.railway.internal",
+      PGUSER: "user",
+      PGPASSWORD: secret("SD_DB_PASS"),
+      PGDATABASE: "appwrite",
+      KEEP_DAYS: "14",
+    },
+  });
+  const monitor = service("monitor", {
+    replicas: REGION,
+    start: "bun monitor.ts",
+    deploy: { cronSchedule: "*/5 * * * *", restartPolicyType: "NEVER" },
+    env: { ...opsEnv, ALERT_EVERY_HOURS: "3" },
   });
 
   return project("sitedock", {
@@ -146,6 +176,8 @@ export default defineRailway(() => {
       gatewayData,
       mailGateway,
       router,
+      backup,
+      monitor,
     ],
   });
 });

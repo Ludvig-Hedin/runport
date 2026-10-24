@@ -1,7 +1,9 @@
 import { EmailMessage } from "cloudflare:email";
 
 // POST / with the raw MIME message as the body.
-// Headers: Authorization: Bearer <SEND_TOKEN>, X-Mail-From, X-Mail-To (comma separated).
+// Headers: Authorization: Bearer <SEND_TOKEN>, X-Mail-From, X-Mail-To (a JSON
+// array of addresses). Answers 200 with how many recipients got it and the
+// error codes for the rest, so the caller can tell partial from full failure.
 // The mail gateway has already checked caps and who may send as whom; this
 // only re-checks the sender domain and delivers one copy per recipient.
 
@@ -36,24 +38,31 @@ export default {
     if (!env.SEND_TOKEN || !(await sameSecret(auth, `Bearer ${env.SEND_TOKEN}`))) return json(401, { error: "unauthorized" });
 
     const from = (request.headers.get("x-mail-from") ?? "").trim().toLowerCase();
-    const to = (request.headers.get("x-mail-to") ?? "").split(",").map((s) => s.trim()).filter(Boolean);
+    let to: unknown;
+    try {
+      to = JSON.parse(request.headers.get("x-mail-to") ?? "");
+    } catch {
+      return json(400, { error: "bad recipients" });
+    }
     if (!ADDRESS.test(from) || !from.endsWith(`@${env.SENDER_DOMAIN}`)) return json(400, { error: "sender not allowed" });
-    if (to.length === 0 || to.length > MAX_RECIPIENTS || !to.every((t) => ADDRESS.test(t))) return json(400, { error: "bad recipients" });
+    if (!Array.isArray(to) || to.length === 0 || to.length > MAX_RECIPIENTS || !to.every((t) => typeof t === "string" && ADDRESS.test(t))) {
+      return json(400, { error: "bad recipients" });
+    }
     const length = Number(request.headers.get("content-length"));
     if (!Number.isFinite(length) || length <= 0 || length > MAX_BYTES) return json(413, { error: "bad size" });
 
     const raw = await request.text();
-    const failed: { to: string; code: string; message: string }[] = [];
-    for (const recipient of to) {
+    // Codes only, never addresses, so nothing personal ends up in logs.
+    const codes: string[] = [];
+    let sent = 0;
+    for (const recipient of to as string[]) {
       try {
         await env.EMAIL.send(new EmailMessage(from, recipient, raw));
+        sent++;
       } catch (error) {
-        failed.push({ to: recipient, code: (error as { code?: string }).code ?? "E_UNKNOWN", message: (error as Error).message });
+        codes.push((error as { code?: string }).code ?? "E_UNKNOWN");
       }
     }
-    if (failed.length === 0) return json(200, { sent: to.length });
-    // Limits and outages are worth retrying; anything else is permanent.
-    const retry = failed.some((f) => /RATE_LIMIT|DAILY_LIMIT|INTERNAL|DELIVERY_FAILED/.test(f.code));
-    return json(retry ? 503 : 422, { sent: to.length - failed.length, failed });
+    return json(200, { sent, failed: codes.length, codes });
   },
 } satisfies ExportedHandler<Env>;

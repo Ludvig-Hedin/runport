@@ -84,8 +84,10 @@ export function createSmtpServer(config: Config, limits: Limits, deliver: Delive
       throw smtpError(`Not sent: ${reservation.reason}`, 550);
     }
     try {
-      await deliver({ from, to }, raw);
-      log({ app, kind, recipients: to.length, bytes: raw.length, result: "sent" });
+      const delivered = await deliver({ from, to }, raw);
+      // A partial delivery counts as sent; only the undelivered part is given back.
+      if (delivered < to.length) limits.release(app, kind, to.length - delivered);
+      log({ app, kind, recipients: to.length, delivered, bytes: raw.length, result: delivered < to.length ? "partly sent" : "sent" });
     } catch (error) {
       limits.release(app, kind, to.length);
       log({ app, kind, recipients: to.length, bytes: raw.length, result: "failed", reason: (error as Error).message });

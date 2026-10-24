@@ -78,6 +78,7 @@ const config: Config = {
 
 let delivered: Envelope[] = [];
 let failNext: false | "retry" | "permanent" = false;
+let partial: number | null = null;
 let limits = new Limits(":memory:", config.caps);
 const server = createSmtpServer(
   config,
@@ -89,6 +90,7 @@ const server = createSmtpServer(
       throw kind === "permanent" ? new DeliveryError("recipient refused", false) : new Error("provider down");
     }
     delivered.push(envelope);
+    return partial ?? envelope.to.length;
   },
   () => {},
 );
@@ -158,6 +160,7 @@ describe("SMTP gateway", () => {
   beforeEach(() => {
     delivered = [];
     failNext = false;
+    partial = null;
     limits = new Limits(":memory:", config.caps);
   });
 
@@ -218,6 +221,12 @@ describe("SMTP gateway", () => {
     expect(limits.today().apps.todo?.mail ?? 0).toBe(0);
   });
 
+  test("a partial delivery counts as sent and frees only the undelivered part", async () => {
+    partial = 1;
+    await send("todo", ["a@x.com", "b@x.com", "c@x.com"]);
+    expect(limits.today().apps.todo.mail).toBe(1);
+  });
+
   test("refuses usernames that are not app ids", async () => {
     expect(await smtpCode(send("../etc", ["a@x.com"]))).toBe(535);
   });
@@ -265,18 +274,29 @@ describe("cloudflareDelivery", () => {
       fetch: async (req) => {
         seen = Object.fromEntries(req.headers);
         body = await req.text();
-        return Response.json({ sent: 2 });
+        return Response.json({ sent: 2, failed: 0, codes: [] });
       },
     });
-    await cloudflareDelivery(`http://127.0.0.1:${srv.port}/`, "tok")({ from: "todo@a.com", to: ["x@b.com", "y@b.com"] }, Buffer.from("raw"));
+    const sent = await cloudflareDelivery(`http://127.0.0.1:${srv.port}/`, "tok")({ from: "todo@a.com", to: ["x@b.com", "y@b.com"] }, Buffer.from("raw"));
+    expect(sent).toBe(2);
     expect(seen.authorization).toBe("Bearer tok");
-    expect(seen["x-mail-to"]).toBe("x@b.com,y@b.com");
+    expect(JSON.parse(seen["x-mail-to"])).toEqual(["x@b.com", "y@b.com"]);
     expect(body).toBe("raw");
     srv.stop();
   });
 
-  test("marks limits and outages as retryable, refusals as permanent", async () => {
-    for (const [status, retry] of [[503, true], [429, true], [422, false], [401, false]] as const) {
+  test("all refused: limits retry, other refusals are permanent", async () => {
+    for (const [codes, retry] of [[["E_RATE_LIMIT_EXCEEDED"], true], [["E_RECIPIENT_SUPPRESSED"], false]] as const) {
+      const srv = Bun.serve({ port: 0, fetch: () => Response.json({ sent: 0, failed: 1, codes }) });
+      const error = await cloudflareDelivery(`http://127.0.0.1:${srv.port}/`, "t")({ from: "a@a.com", to: ["b@b.com"] }, Buffer.from("x")).catch((e) => e);
+      expect((error as DeliveryError).retry).toBe(retry);
+      expect((error as DeliveryError).message).not.toContain("b@b.com");
+      srv.stop();
+    }
+  });
+
+  test("marks outages as retryable and bad requests as permanent", async () => {
+    for (const [status, retry] of [[503, true], [429, true], [400, false], [401, false]] as const) {
       const srv = Bun.serve({ port: 0, fetch: () => new Response("no", { status }) });
       const error = await cloudflareDelivery(`http://127.0.0.1:${srv.port}/`, "t")({ from: "a@a.com", to: ["b@b.com"] }, Buffer.from("x")).catch((e) => e);
       expect(error).toBeInstanceOf(DeliveryError);

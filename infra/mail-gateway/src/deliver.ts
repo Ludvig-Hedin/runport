@@ -8,7 +8,8 @@ import nodemailer from "nodemailer";
 // used for the test inbox.
 
 export type Envelope = { from: string; to: string[] };
-export type Deliver = (envelope: Envelope, raw: Buffer) => Promise<void>;
+/** Resolves with how many recipients got the message. */
+export type Deliver = (envelope: Envelope, raw: Buffer) => Promise<number>;
 
 export function sesDelivery(region: string): Deliver {
   const client = new SESv2Client({ region });
@@ -20,6 +21,7 @@ export function sesDelivery(region: string): Deliver {
         Content: { Raw: { Data: raw } },
       }),
     );
+    return envelope.to.length;
   };
 }
 
@@ -27,6 +29,7 @@ export function smtpDelivery(host: string, port: number): Deliver {
   const transport = nodemailer.createTransport({ host, port, secure: false, ignoreTLS: true });
   return async (envelope, raw) => {
     await transport.sendMail({ envelope, raw });
+    return envelope.to.length;
   };
 }
 
@@ -40,6 +43,8 @@ export class DeliveryError extends Error {
   }
 }
 
+const RETRYABLE = /RATE_LIMIT|DAILY_LIMIT|INTERNAL|DELIVERY_FAILED/;
+
 export function cloudflareDelivery(url: string, token: string): Deliver {
   return async (envelope, raw) => {
     const res = await fetch(url, {
@@ -47,13 +52,16 @@ export function cloudflareDelivery(url: string, token: string): Deliver {
       headers: {
         Authorization: `Bearer ${token}`,
         "X-Mail-From": envelope.from,
-        "X-Mail-To": envelope.to.join(","),
+        // JSON, so no address can split into extra recipients.
+        "X-Mail-To": JSON.stringify(envelope.to),
         "Content-Type": "message/rfc822",
       },
       body: new Uint8Array(raw),
     });
-    if (res.ok) return;
-    const detail = await res.text().catch(() => "");
-    throw new DeliveryError(`Cloudflare answered ${res.status}: ${detail.slice(0, 300)}`, res.status >= 500 || res.status === 429);
+    // Status only in errors: the body could echo addresses.
+    if (!res.ok) throw new DeliveryError(`Cloudflare answered ${res.status}`, res.status >= 500 || res.status === 429);
+    const result = (await res.json()) as { sent: number; failed: number; codes: string[] };
+    if (result.sent > 0) return result.sent;
+    throw new DeliveryError(`Cloudflare refused: ${result.codes.join(", ")}`, result.codes.some((c) => RETRYABLE.test(c)));
   };
 }
