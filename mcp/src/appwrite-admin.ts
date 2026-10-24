@@ -141,6 +141,19 @@ export class AppwriteAdmin {
     ]);
   }
 
+  /** Sends the project's account mails (login codes, resets) through the mail gateway under the app's own name. */
+  async setProjectSmtp(
+    projectId: string,
+    smtp: { senderName: string; senderEmail: string; host: string; port: number; username: string; password: string },
+  ): Promise<void> {
+    await this.send({
+      method: "PATCH",
+      path: "/project/smtp",
+      project: assertAppwriteId(projectId),
+      body: { enabled: true, ...smtp },
+    });
+  }
+
   async deleteProject(projectId: string): Promise<void> {
     await this.first([
       { method: "DELETE", path: `/projects/${seg(projectId)}` },

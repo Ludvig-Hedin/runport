@@ -2,6 +2,7 @@ import { cp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { basename, join } from "node:path";
 import { AppwriteAdmin, AppwriteError } from "./appwrite-admin";
 import { config } from "./config";
+import { readSecret } from "./keychain";
 import { run, succeeds } from "./exec";
 import { createPrivateRepo } from "./github";
 import { type AppRecord, loadRegistry, nextFreePort, removeApp, upsertApp } from "./registry";
@@ -69,6 +70,23 @@ async function ensurePlatform(projectId: string, hostname: string): Promise<void
   }
 }
 
+/** Same derivation as the gateway's identity.ts: one password per app from the master key. */
+async function mailPassword(app: string): Promise<string> {
+  const key = await readSecret("mail-gateway-master-key");
+  return new Bun.CryptoHasher("sha256", key).update(`mail-gateway:${app}`).digest("hex");
+}
+
+async function ensureMail(projectId: string, slug: string, name: string): Promise<void> {
+  await admin.setProjectSmtp(projectId, {
+    senderName: name,
+    senderEmail: `${slug}@${config.mailDomain}`,
+    host: config.mailGateway.host,
+    port: config.mailGateway.port,
+    username: slug,
+    password: await mailPassword(slug),
+  });
+}
+
 async function writeMcpConfig(folder: string, env: Record<string, string>): Promise<void> {
   const mcp = {
     mcpServers: {
@@ -133,6 +151,8 @@ export async function createApp(input: CreateAppInput): Promise<CreateAppResult>
   if (!input.projectId) {
     await ensurePlatform(projectId, "localhost");
     steps.push("allowed localhost as web platform");
+    await ensureMail(projectId, slug, input.name);
+    steps.push(`account mails sent as "${input.name}" <${slug}@${config.mailDomain}>`);
   }
 
   await run(["bun", "install"], folder);
