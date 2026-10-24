@@ -98,6 +98,22 @@ describe("headerFrom", () => {
     expect(headerFrom(msg("From: a@x.com\r\nFrom: b@x.com"))).toBeNull();
     expect(headerFrom(msg("From: <a@x.com>, <b@x.com>"))).toBeNull();
   });
+  test("never takes an address hidden in a comment", () => {
+    expect(headerFrom(msg("From: security@bank.com (<todo@apps.example.com>)"))).not.toBe("todo@apps.example.com");
+  });
+  test("rejects addresses in the display name", () => {
+    expect(headerFrom(msg('From: "security@bank.com" <todo@apps.example.com>'))).toBeNull();
+    expect(headerFrom(msg("From: <todo@apps.example.com> security@bank.com"))).toBeNull();
+  });
+  test("rejects groups, bare line breaks and space before the colon", () => {
+    expect(headerFrom(msg("From: team: todo@apps.example.com;"))).toBeNull();
+    expect(headerFrom(msg("From: todo@apps.example.com\nFrom: security@bank.com"))).toBeNull();
+    expect(headerFrom(msg("From : todo@apps.example.com"))).toBeNull();
+  });
+  test("allows Sender only when it equals From", () => {
+    expect(headerFrom(msg("From: todo@apps.example.com\r\nSender: todo@apps.example.com"))).toBe("todo@apps.example.com");
+    expect(headerFrom(msg("From: todo@apps.example.com\r\nSender: security@bank.com"))).toBeNull();
+  });
   test("ignores From lines in the body", () => {
     expect(headerFrom(Buffer.from("Subject: x\r\n\r\nFrom: a@x.com"))).toBeNull();
   });
