@@ -32,6 +32,22 @@ accounts and a database, without signing up for anything per app.
 - Hosting online: Railway. Appwrite does accounts, data and files; Railway runs
   the apps. Approved 2026-10-23 ("railway. kör").
 
+## Owner decisions (2026-10-24)
+
+- Goal: the platform replaces Vercel, Clerk, Convex and Resend for all his
+  future apps. Claude or Codex must be able to do everything in it.
+- Email is built in: app emails (verification, login codes, receipts) and
+  newsletters to lists. Open source, self-hosted where sensible.
+- Delivery provider still open: he will use Amazon SES if setup is simple and
+  spending can be capped hard; otherwise Resend or self-hosted. Must not risk
+  a surprise bill.
+- Sign-in in every new app: one-time code by email by default, switchable to
+  email and password. Google and GitHub sign-in as well.
+- Only Ludvig logs in to the admin.
+- Admin look: neutral dark mode, blue instead of Appwrite pink, no all-caps
+  labels (done 2026-10-24). Sidebar cleanup and admin toggles proposed, not
+  yet approved.
+
 ## What I assumed
 
 - **Railway split** (pending owner confirmation, see The decision): Appwrite

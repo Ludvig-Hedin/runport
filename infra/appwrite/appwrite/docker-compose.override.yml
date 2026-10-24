@@ -18,3 +18,39 @@ services:
       context: ../console-theme
       args:
         BASE: appwrite/new:1.2.97-self-hosted
+
+  # Every email goes through the gateway (infra/mail-gateway): daily caps, then
+  # Amazon SES, or the local test inbox while DELIVERY=smtp.
+  mail-gateway:
+    image: builder-platform/mail-gateway:local
+    build: ../../mail-gateway
+    container_name: appwrite-mail-gateway
+    restart: unless-stopped
+    networks:
+      - appwrite
+    volumes:
+      - appwrite-mail-gateway:/data
+    environment:
+      - GATEWAY_PASSWORD=${MAIL_GATEWAY_PASSWORD}
+      - DELIVERY=${MAIL_DELIVERY:-smtp}
+      - MAIL_DAILY_LIMIT=${MAIL_DAILY_LIMIT:-1000}
+      - MAIL_APP_DAILY_LIMIT=${MAIL_APP_DAILY_LIMIT:-300}
+      - SENDER_DOMAINS=${MAIL_SENDER_DOMAINS:-}
+      - AWS_REGION=${MAIL_SES_REGION:-eu-north-1}
+      - AWS_ACCESS_KEY_ID=${MAIL_SES_ACCESS_KEY_ID:-}
+      - AWS_SECRET_ACCESS_KEY=${MAIL_SES_SECRET_ACCESS_KEY:-}
+      - FORWARD_HOST=mailpit
+      - FORWARD_PORT=1025
+
+  # Local test inbox: http://localhost:8025. Nothing leaves the Mac.
+  mailpit:
+    image: axllent/mailpit:v1.29
+    container_name: appwrite-mailpit
+    restart: unless-stopped
+    networks:
+      - appwrite
+    ports:
+      - 127.0.0.1:8025:8025
+
+volumes:
+  appwrite-mail-gateway:

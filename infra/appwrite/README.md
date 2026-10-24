@@ -17,6 +17,14 @@ docker compose stop      # stop, keeps data
 docker compose ps        # status
 ```
 
+If the API stops answering after Docker restarts (`curl` gets "connection
+reset"), restart the proxy: `docker compose restart traefik`.
+
+## Email
+
+Appwrite sends all mail through `../mail-gateway` (daily caps). Locally it
+lands in the test inbox at http://localhost:8025 and never leaves the Mac.
+
 ## Owner login for the platform tool
 
 The owner account exists (created 2026-10-24) and the `platform` MCP tool logs
