@@ -2,7 +2,7 @@ import { afterAll, beforeEach, describe, expect, test } from "bun:test";
 import { createHmac } from "node:crypto";
 import nodemailer, { type SendMailOptions } from "nodemailer";
 import type { Config } from "../src/config";
-import type { Envelope } from "../src/deliver";
+import { DeliveryError, cloudflareDelivery, type Envelope } from "../src/deliver";
 import { appPassword, headerFrom } from "../src/identity";
 import { Limits, stockholmDay } from "../src/limits";
 import { createSmtpServer } from "../src/server";
@@ -72,18 +72,21 @@ const config: Config = {
   sesRegion: "eu-north-1",
   forwardHost: "",
   forwardPort: 0,
+  cloudflareUrl: "",
+  cloudflareToken: "",
 };
 
 let delivered: Envelope[] = [];
-let failNext = false;
+let failNext: false | "retry" | "permanent" = false;
 let limits = new Limits(":memory:", config.caps);
 const server = createSmtpServer(
   config,
   { reserve: (...a) => limits.reserve(...a), release: (...a) => limits.release(...a), today: () => limits.today() } as Limits,
   async (envelope) => {
     if (failNext) {
+      const kind = failNext;
       failNext = false;
-      throw new Error("provider down");
+      throw kind === "permanent" ? new DeliveryError("recipient refused", false) : new Error("provider down");
     }
     delivered.push(envelope);
   },
@@ -209,6 +212,12 @@ describe("SMTP gateway", () => {
     expect(await smtpCode(send("shop:promo", ["a@x.com"], {}, appPassword(config.masterKey, "shop")))).toBe(535);
   });
 
+  test("a permanent refusal is not retried and frees the cap", async () => {
+    failNext = "permanent";
+    expect(await smtpCode(send("todo", ["a@x.com"]))).toBe(554);
+    expect(limits.today().apps.todo?.mail ?? 0).toBe(0);
+  });
+
   test("refuses usernames that are not app ids", async () => {
     expect(await smtpCode(send("../etc", ["a@x.com"]))).toBe(535);
   });
@@ -241,8 +250,38 @@ describe("SMTP gateway", () => {
   });
 
   test("a failed delivery asks the sender to retry and does not use the cap", async () => {
-    failNext = true;
+    failNext = "retry";
     expect(await smtpCode(send("todo", ["a@x.com"]))).toBe(451);
     expect(limits.today().apps.todo?.mail ?? 0).toBe(0);
+  });
+});
+
+describe("cloudflareDelivery", () => {
+  test("posts the raw message with the envelope and token", async () => {
+    let seen: Record<string, string> = {};
+    let body = "";
+    const srv = Bun.serve({
+      port: 0,
+      fetch: async (req) => {
+        seen = Object.fromEntries(req.headers);
+        body = await req.text();
+        return Response.json({ sent: 2 });
+      },
+    });
+    await cloudflareDelivery(`http://127.0.0.1:${srv.port}/`, "tok")({ from: "todo@a.com", to: ["x@b.com", "y@b.com"] }, Buffer.from("raw"));
+    expect(seen.authorization).toBe("Bearer tok");
+    expect(seen["x-mail-to"]).toBe("x@b.com,y@b.com");
+    expect(body).toBe("raw");
+    srv.stop();
+  });
+
+  test("marks limits and outages as retryable, refusals as permanent", async () => {
+    for (const [status, retry] of [[503, true], [429, true], [422, false], [401, false]] as const) {
+      const srv = Bun.serve({ port: 0, fetch: () => new Response("no", { status }) });
+      const error = await cloudflareDelivery(`http://127.0.0.1:${srv.port}/`, "t")({ from: "a@a.com", to: ["b@b.com"] }, Buffer.from("x")).catch((e) => e);
+      expect(error).toBeInstanceOf(DeliveryError);
+      expect((error as DeliveryError).retry).toBe(retry);
+      srv.stop();
+    }
   });
 });

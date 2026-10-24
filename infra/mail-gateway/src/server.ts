@@ -1,6 +1,6 @@
 import { SMTPServer, type SMTPServerSession } from "smtp-server";
 import type { Config } from "./config";
-import type { Deliver } from "./deliver";
+import { type Deliver, DeliveryError } from "./deliver";
 import { APP_ID, headerFrom, passwordMatches, senderProblem } from "./identity";
 import type { Kind, Limits } from "./limits";
 
@@ -89,6 +89,7 @@ export function createSmtpServer(config: Config, limits: Limits, deliver: Delive
     } catch (error) {
       limits.release(app, kind, to.length);
       log({ app, kind, recipients: to.length, bytes: raw.length, result: "failed", reason: (error as Error).message });
+      if (error instanceof DeliveryError && !error.retry) throw smtpError("Not sent: the mail service refused this email", 554);
       throw smtpError("Delivery failed, try again later", 451);
     }
   }

@@ -1,0 +1,10 @@
+{
+  // Sitedock's outgoing mail: the mail gateway on Railway posts finished
+  // messages here, and Cloudflare Email Sending delivers them.
+  "name": "sitedock-mail",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-10-01",
+  "send_email": [{ "name": "EMAIL" }],
+  "vars": { "SENDER_DOMAIN": "apps.ludvighedin.com" },
+  "observability": { "enabled": true }
+}

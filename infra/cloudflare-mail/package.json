@@ -1,0 +1,10 @@
+{
+  "name": "sitedock-mail",
+  "private": true,
+  "type": "module",
+  "devDependencies": {
+    "@cloudflare/workers-types": "^5.20261024.1",
+    "typescript": "^7.0.2",
+    "wrangler": "4"
+  }
+}

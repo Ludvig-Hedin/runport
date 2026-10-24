@@ -22,7 +22,9 @@ const list = (name: string): string[] =>
 
 export function loadConfig() {
   const delivery = process.env.DELIVERY ?? "smtp";
-  if (delivery !== "ses" && delivery !== "smtp") throw new Error(`DELIVERY must be "ses" or "smtp", got "${delivery}".`);
+  if (delivery !== "ses" && delivery !== "smtp" && delivery !== "cloudflare") {
+    throw new Error(`DELIVERY must be "cloudflare", "ses" or "smtp", got "${delivery}".`);
+  }
   return {
     /** Each app's SMTP password is derived from this key, see identity.ts. */
     masterKey: required("GATEWAY_MASTER_KEY"),
@@ -42,6 +44,8 @@ export function loadConfig() {
     senderDomains: list("SENDER_DOMAINS"),
     delivery,
     sesRegion: process.env.AWS_REGION ?? "eu-north-1",
+    cloudflareUrl: process.env.CLOUDFLARE_MAIL_URL ?? "",
+    cloudflareToken: process.env.CLOUDFLARE_MAIL_TOKEN ?? "",
     forwardHost: process.env.FORWARD_HOST ?? "mailpit",
     forwardPort: positiveInt("FORWARD_PORT", 1025),
   } as const;

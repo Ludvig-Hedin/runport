@@ -1,11 +1,18 @@
 import { loadConfig } from "./config";
-import { sesDelivery, smtpDelivery } from "./deliver";
+import { cloudflareDelivery, sesDelivery, smtpDelivery } from "./deliver";
 import { Limits } from "./limits";
 import { createSmtpServer, jsonLog } from "./server";
 
 const config = loadConfig();
 const limits = new Limits(config.dataFile, config.caps);
-const deliver = config.delivery === "ses" ? sesDelivery(config.sesRegion) : smtpDelivery(config.forwardHost, config.forwardPort);
+function pickDelivery() {
+  if (config.delivery === "cloudflare") {
+    if (!config.cloudflareUrl || !config.cloudflareToken) throw new Error("DELIVERY=cloudflare needs CLOUDFLARE_MAIL_URL and CLOUDFLARE_MAIL_TOKEN.");
+    return cloudflareDelivery(config.cloudflareUrl, config.cloudflareToken);
+  }
+  return config.delivery === "ses" ? sesDelivery(config.sesRegion) : smtpDelivery(config.forwardHost, config.forwardPort);
+}
+const deliver = pickDelivery();
 
 const smtp = createSmtpServer(config, limits, deliver);
 smtp.on("error", (error) => jsonLog({ result: "smtp-error", reason: error.message }));

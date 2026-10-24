@@ -2,7 +2,8 @@ import { readFileSync } from "node:fs";
 import { bucket, defineRailway, image, project, ref, service, volume } from "railway/iac";
 
 // Sitedock on Railway: Appwrite 2.6.1 from its official images, the mail
-// gateway, a test inbox and one public router. Run through ../apply.sh,
+// gateway (delivering through Cloudflare, infra/cloudflare-mail) and one
+// public router. Usage statistics are off, so there is no ClickHouse. Run through ../apply.sh,
 // which reads the secrets from the macOS Keychain into SD_* variables so they
 // never sit in this file or in the repo.
 
@@ -89,25 +90,15 @@ export default defineRailway(() => {
     volumeMounts: { "redis-data": { mountPath: "/data" } },
   });
 
-  const clickhouseData = volume("clickhouse-data", DISK);
-  const clickhouse = service("clickhouse", {
-    // Built from infra/railway/clickhouse with `railway up`; no source here.
-    replicas: REGION,
-    volumeMounts: { "clickhouse-data": { mountPath: "/var/lib/clickhouse" } },
-    env: {
-      CLICKHOUSE_DB: "appwrite",
-      CLICKHOUSE_USER: "appwrite",
-      CLICKHOUSE_PASSWORD: secret("SD_USAGE_PASS"),
-      CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: "1",
-      CLICKHOUSE_ALWAYS_RUN_INITDB_SCRIPTS: "1",
-    },
-  });
 
   const geo = service("appwrite-geo", { source: image("appwrite/geo:0.3.2"), replicas: REGION });
 
   const console_ = service("appwrite-console", {
     source: image("appwrite/new:1.2.97-self-hosted"),
     replicas: REGION,
+    // Only the owner uses the admin. It sleeps after 10 idle minutes and
+    // wakes on the next visit, which takes a few seconds.
+    deploy: { sleepApplication: true },
     env: { PORT: "3000", VITE_APPWRITE_VERSION: "2.6.1" },
   });
 
@@ -118,24 +109,17 @@ export default defineRailway(() => {
     volumeMounts: { "mail-gateway-data": { mountPath: "/data" } },
     env: {
       GATEWAY_MASTER_KEY: secret("SD_MAIL_MASTER_KEY"),
-      DELIVERY: process.env.SD_MAIL_DELIVERY ?? "smtp",
+      DELIVERY: "cloudflare",
+      CLOUDFLARE_MAIL_URL: "https://sitedock-mail.ludvighedin15.workers.dev/",
+      CLOUDFLARE_MAIL_TOKEN: secret("SD_CF_MAIL_TOKEN"),
       MAIL_DAILY_LIMIT: "1000",
       MAIL_APP_DAILY_LIMIT: "300",
       MAIL_APP_NEWS_DAILY_LIMIT: "500",
       MAIL_NEWS_SHARE_PERCENT: "70",
       SENDER_DOMAINS: "apps.ludvighedin.com",
-      FORWARD_HOST: "mailpit.railway.internal",
-      FORWARD_PORT: "1025",
     },
   });
 
-  // Test inbox until Amazon SES is set up: reachable only through the router
-  // at /_mail, behind a password.
-  const mailpit = service("mailpit", {
-    source: image("axllent/mailpit:v1.29"),
-    replicas: REGION,
-    env: { MP_WEBROOT: "/_mail/", MP_UI_AUTH: secret("SD_MAILPIT_AUTH"), MP_MAX_MESSAGES: "500" },
-  });
 
   const router = service("router", {
     // Built from infra/railway/router with `railway up`; no source here.
@@ -151,8 +135,6 @@ export default defineRailway(() => {
       postgresql,
       redisData,
       redis,
-      clickhouseData,
-      clickhouse,
       geo,
       appwritePart("appwrite"),
       appwritePart("appwrite-realtime", "realtime"),
@@ -163,7 +145,6 @@ export default defineRailway(() => {
       console_,
       gatewayData,
       mailGateway,
-      mailpit,
       router,
     ],
   });

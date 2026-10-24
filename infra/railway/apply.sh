@@ -26,12 +26,12 @@ export SD_USAGE_PASS=$(ensure usage-pass)
 export SD_MAIL_MASTER_KEY=$(ensure mail-master-key)
 # Same derivation as infra/mail-gateway/src/identity.ts for the system sender.
 export SD_SMTP_SYSTEM_PASSWORD=$(printf 'mail-gateway-system' | openssl dgst -sha256 -hmac "$SD_MAIL_MASTER_KEY" -r | cut -d' ' -f1)
-export SD_MAILPIT_AUTH="ludvig:$(ensure mailpit-password 12)"
+export SD_CF_MAIL_TOKEN=$(get cloudflare-mail-token)
 export SD_PUBLIC_DOMAIN=$(get public-domain || true)
 if [ -z "$SD_PUBLIC_DOMAIN" ]; then echo "Set the router domain first: security add-generic-password -s $SERVICE -a public-domain -w <domain>" >&2; exit 1; fi
 
 case "${1:-plan}" in
   plan) railway config plan "${@:2}" ;;
-  apply) railway config apply --yes ;;
+  apply) railway config apply --yes "${@:2}" ;;
   *) echo "usage: $0 plan|apply" >&2; exit 64 ;;
 esac

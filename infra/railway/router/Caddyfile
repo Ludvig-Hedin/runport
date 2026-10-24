@@ -21,10 +21,6 @@
 	handle /health {
 		respond "ok" 200
 	}
-	# Test inbox, password protected by Mailpit itself. Remove with Mailpit.
-	handle /_mail* {
-		reverse_proxy mailpit.railway.internal:8025
-	}
 	handle /v1/realtime* {
 		reverse_proxy appwrite-realtime.railway.internal:80
 	}
