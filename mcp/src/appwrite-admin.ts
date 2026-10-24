@@ -8,8 +8,8 @@ const seg = (projectId: string) => encodeURIComponent(assertAppwriteId(projectId
 // Talks to Appwrite's console API as the owner, the same way the admin screen
 // does. Appwrite 1.x and 2.x expose project admin under different routes, so
 // each operation lists its candidate routes in order; a route that does not
-// exist (404/405) moves on to the next one. The working route is fixed after
-// the stage 1 spike (docs/spikes/create-project.md).
+// exist (404/405) moves on to the next one. On 2.6.1 the first route of each
+// operation answers (docs/spikes/create-project.md).
 
 type Json = Record<string, unknown>;
 
@@ -61,7 +61,8 @@ export class AppwriteAdmin {
       headers: {
         "Content-Type": "application/json",
         "X-Appwrite-Project": route.project ?? "console",
-        "X-Appwrite-Mode": "admin",
+        // Appwrite 2.x rejects admin mode on the console project itself.
+        ...(route.project ? { "X-Appwrite-Mode": "admin" } : {}),
         Cookie: this.cookie ?? "",
       },
       body: route.body ? JSON.stringify(route.body) : undefined,
@@ -118,22 +119,25 @@ export class AppwriteAdmin {
   }
 
   async createServerKey(projectId: string, name: string): Promise<{ $id: string; secret: string }> {
-    const body = { name, scopes: APP_KEY_SCOPES, expire: null };
+    const body = { keyId: "unique()", name, scopes: APP_KEY_SCOPES, expire: null };
     return this.first([
       { method: "POST", path: `/projects/${seg(projectId)}/keys`, body },
       { method: "POST", path: `/organization/projects/${seg(projectId)}/keys`, body },
     ]);
   }
 
+  /** Adds a web platform unless the project already allows that hostname. */
   async addWebPlatform(projectId: string, hostname: string): Promise<void> {
+    const { platforms } = await this.first<{ platforms: { hostname?: string }[] }>([
+      { method: "GET", path: `/projects/${seg(projectId)}/platforms` },
+      { method: "GET", path: "/project/platforms", project: assertAppwriteId(projectId) },
+    ]);
+    if (platforms.some((p) => p.hostname === hostname)) return;
+    // Platform ids are unique across all projects in 2.x, so let Appwrite pick one.
+    const body = { platformId: "unique()", name: hostname, hostname };
     await this.first([
-      { method: "POST", path: `/projects/${seg(projectId)}/platforms`, body: { type: "web", name: hostname, hostname } },
-      {
-        method: "POST",
-        path: "/project/platforms/web",
-        project: assertAppwriteId(projectId),
-        body: { platformId: hostname.replace(/[^a-z0-9]/gi, "-").slice(0, 36), name: hostname, hostname },
-      },
+      { method: "POST", path: `/projects/${seg(projectId)}/platforms`, body: { ...body, type: "web" } },
+      { method: "POST", path: "/project/platforms/web", project: assertAppwriteId(projectId), body },
     ]);
   }
 
