@@ -61,10 +61,11 @@ export default defineRailway(() => {
     _APP_STORAGE_S3_ENDPOINT: ref(files, "ENDPOINT"),
   };
 
-  const appwritePart = (name: string, start?: string) =>
+  const appwritePart = (name: string, start?: string, cronSchedule?: string) =>
     service(name, {
       source: image(APPWRITE),
       ...(start ? { start } : {}),
+      ...(cronSchedule ? { deploy: { cronSchedule, restartPolicyType: "NEVER" as const } } : {}),
       replicas: REGION,
       env: appwriteEnv,
     });
@@ -169,9 +170,11 @@ export default defineRailway(() => {
       appwritePart("appwrite"),
       appwritePart("appwrite-realtime", "realtime"),
       appwritePart("appwrite-worker", "worker"),
-      appwritePart("appwrite-task-scheduler", "schedule"),
-      appwritePart("appwrite-task-maintenance", "maintenance"),
-      appwritePart("appwrite-task-interval", "interval"),
+      // Cleanup (expired sessions, old logs, cache) once a night instead of a
+      // process that waits all day. There is no scheduler or interval task:
+      // they run functions, messaging and Appwrite-managed domains, which
+      // Runport does not use (apps get their addresses from Railway).
+      appwritePart("appwrite-task-maintenance", "maintenance --type=trigger", "30 1 * * *"),
       console_,
       gatewayData,
       mailGateway,

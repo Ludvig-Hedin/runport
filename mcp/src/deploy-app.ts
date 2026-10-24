@@ -2,6 +2,7 @@
 // online Runport, then a Railway project for the app itself.
 // Run: PLATFORM_KEYCHAIN_SERVICE=runport-prod PLATFORM_APPWRITE_ENDPOINT=https://<runport>/v1 bun src/deploy-app.ts <slug>
 // Safe to rerun: each step checks what exists first.
+import { homedir } from "node:os";
 import { join } from "node:path";
 import { AppwriteAdmin } from "./appwrite-admin";
 import { config } from "./config";
@@ -22,6 +23,31 @@ async function railway(args: string[], input?: string): Promise<string> {
   return out;
 }
 
+/**
+ * Lets the app sleep after about 10 idle minutes; the next visit wakes it in a
+ * few seconds. The CLI has no flag for this, so it goes through Railway's API
+ * with the CLI's own login. Takes effect from the deploy below.
+ */
+async function sleepWhenIdle(): Promise<void> {
+  type Status = { environments: { edges: { node: { id: string; name: string } }[] }; services: { edges: { node: { id: string; name: string } }[] } };
+  const status = JSON.parse(await railway(["status", "--json"])) as Status;
+  const environmentId = status.environments.edges.find((e) => e.node.name === "production")?.node.id;
+  const serviceId = status.services.edges.find((s) => s.node.name === "web")?.node.id;
+  const login = JSON.parse(await Bun.file(join(homedir(), ".railway", "config.json")).text()) as { user?: { accessToken?: string; token?: string } };
+  const token = process.env.RAILWAY_API_TOKEN ?? login.user?.accessToken ?? login.user?.token;
+  if (!environmentId || !serviceId || !token) throw new Error("Could not find the Railway service or login to turn on sleeping.");
+  const res = await fetch("https://backboard.railway.com/graphql/v2", {
+    method: "POST",
+    headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+    body: JSON.stringify({
+      query: "mutation($s: String!, $e: String!) { serviceInstanceUpdate(serviceId: $s, environmentId: $e, input: { sleepApplication: true }) }",
+      variables: { s: serviceId, e: environmentId },
+    }),
+  });
+  const body = (await res.json()) as { errors?: { message: string }[] };
+  if (!res.ok || body.errors) throw new Error(`Railway refused to turn on sleeping: ${body.errors?.map((e) => e.message).join("; ") ?? res.status}`);
+}
+
 // 1. Railway project and service with a public domain.
 const linked = await railway(["status", "--json"]).then(
   (out) => JSON.parse(out) as { name: string },
@@ -30,6 +56,7 @@ const linked = await railway(["status", "--json"]).then(
 if (!linked) await railway(["init", "--name", `${slug}-app`, "--json"]);
 const services = JSON.parse(await railway(["status", "--json"])).services.edges as { node: { name: string } }[];
 if (!services.some((s) => s.node.name === "web")) await railway(["add", "--service", "web"]);
+await sleepWhenIdle();
 const domainOut = JSON.parse(await railway(["domain", "--service", "web", "--json"])) as { domain?: string; domains?: string[] };
 const domain = new URL(domainOut.domain ?? domainOut.domains?.[0] ?? "").host;
 console.log(`app address: https://${domain}`);

@@ -19,7 +19,10 @@ else the admin. The admin sleeps when idle; the router waits for it to wake.
 - `backup` runs nightly at 01:00 UTC: pg_dump to `backups/` in the bucket,
   kept 14 days. `monitor` runs every 5 minutes and emails
   ludvig@ludvighedin.com when the API, the gateway or the backup is wrong.
-  Usage statistics are off, so there is no ClickHouse.
+  Usage statistics are off, so there is no ClickHouse. Appwrite's
+  cleanup (`appwrite-task-maintenance`) runs nightly at 01:30 UTC as a
+  cron. There is no scheduler or interval task: they serve functions,
+  messaging and Appwrite-managed domains, which Runport does not use.
 - Owner login for the admin: Keychain `runport-prod` / `owner-email` and
   `owner-password`.
 - Own addresses: `bun mcp/src/custom-domain.ts <domain> <service> <port>

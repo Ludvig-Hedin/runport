@@ -261,7 +261,12 @@ Wireframes come with the stage 4 plan.
 ## What it costs
 
 - Stage 1: nothing new.
-- Stage 2: about 300 to 550 kr a month for a handful of apps. Estimate.
+- Stage 2, measured 2026-10-25 after the idle cuts: Runport uses about
+  0.75 GB of memory and almost no CPU, roughly $8 (85 kr) a month on Railway.
+  Apps sleep when idle and cost close to nothing until visited. The Railway
+  workspace is on Pro, whose $20 minimum covers this; the Hobby plan ($5
+  including $5 usage) would be cheaper but caps volumes at 5 GB, and the
+  current volumes were created at 50 GB.
 - No paid AI calls.
 
 ## Risks
