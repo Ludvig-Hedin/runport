@@ -4,10 +4,10 @@
 	admin off
 	auto_https off
 	servers {
-		# Railway's edge reaches us from a private address and appends the
+		# Railway's edge reaches us from a private or shared (100.64/10) address and appends the
 		# real client to X-Forwarded-For. Strict mode takes the right-most
 		# untrusted entry, so addresses a client adds itself are ignored.
-		trusted_proxies static private_ranges
+		trusted_proxies static private_ranges 100.64.0.0/10
 		trusted_proxies_strict
 		client_ip_headers X-Forwarded-For
 	}

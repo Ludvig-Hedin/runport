@@ -33,6 +33,9 @@ export default defineRailway(() => {
 
   const appwriteEnv = {
     ...baseEnv(),
+    // Appwrite listens on $PORT, which Railway sets to its own default; the
+    // router expects the API and realtime on 80.
+    PORT: "80",
     _APP_DOMAIN: domain,
     _APP_DOMAIN_TARGET: domain,
     _APP_DOMAIN_TARGET_CNAME: domain,
