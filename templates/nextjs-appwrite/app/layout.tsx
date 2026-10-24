@@ -1,9 +1,16 @@
 import type { Metadata } from "next";
+import { connection } from "next/server";
+import { indexingAllowed } from "@/lib/config";
 import "./globals.css";
 
-export const metadata: Metadata = {
-  title: "New app",
-};
+export async function generateMetadata(): Promise<Metadata> {
+  // Read the env per request, so a build never bakes in the wrong answer.
+  await connection();
+  return {
+    title: "New app",
+    robots: indexingAllowed() ? undefined : { index: false, follow: false },
+  };
+}
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
