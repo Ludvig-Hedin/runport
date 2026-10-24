@@ -2,11 +2,19 @@ import { SMTPServer, type SMTPServerSession } from "smtp-server";
 import type { Config } from "./config";
 import type { Deliver } from "./deliver";
 import { APP_ID, headerFrom, passwordMatches, senderProblem } from "./identity";
-import type { Limits } from "./limits";
+import type { Kind, Limits } from "./limits";
 
 // SMTP entry point for every email the platform sends: Appwrite's own account
 // mails and every app's messages. Each sender logs in with its app id as the
-// username, so caps and logs are per app.
+// username, so caps and logs are per app. Bulk sends log in as "<app>:news"
+// with the same password, so they are counted separately from login codes.
+
+const parseUser = (user: string): { app: string; kind: Kind } | null => {
+  const [app, kind, extra] = user.toLowerCase().split(":");
+  if (extra !== undefined || !APP_ID.test(app)) return null;
+  if (kind === undefined) return { app, kind: "mail" };
+  return kind === "news" ? { app, kind: "news" } : null;
+};
 
 type Log = (entry: Record<string, unknown>) => void;
 export const jsonLog: Log = (entry) => console.log(JSON.stringify({ time: new Date().toISOString(), ...entry }));
@@ -25,16 +33,16 @@ export function createSmtpServer(config: Config, limits: Limits, deliver: Delive
     logger: false,
 
     onAuth(auth, _session, callback) {
-      const app = (auth.username ?? "").toLowerCase();
-      if (!APP_ID.test(app) || !passwordMatches(config.masterKey, app, auth.password ?? "")) {
+      const who = parseUser(auth.username ?? "");
+      if (!who || !passwordMatches(config.masterKey, who.app, auth.password ?? "")) {
         return callback(smtpError("Invalid login", 535));
       }
-      callback(null, { user: app });
+      callback(null, { user: `${who.app}:${who.kind}` });
     },
 
     onMailFrom(address, session, callback) {
       if (!session.user) return callback(smtpError("Log in first", 530));
-      const problem = senderProblem(String(session.user), address.address, config.senderDomains);
+      const problem = senderProblem(String(session.user).split(":")[0], address.address, config.senderDomains);
       callback(problem ? smtpError(problem, 553) : undefined);
     },
 
@@ -60,7 +68,7 @@ export function createSmtpServer(config: Config, limits: Limits, deliver: Delive
   });
 
   async function handle(session: SMTPServerSession, raw: Buffer): Promise<void> {
-    const app = String(session.user);
+    const [app, kind] = String(session.user).split(":") as [string, Kind];
     const from = session.envelope.mailFrom ? session.envelope.mailFrom.address : "";
     const to = session.envelope.rcptTo.map((r) => r.address);
     // Checked here rather than per recipient: refusing only the extra
@@ -69,18 +77,18 @@ export function createSmtpServer(config: Config, limits: Limits, deliver: Delive
     // The visible From must be the checked envelope sender, or an app could
     // pass the envelope check and still show someone else's address.
     if (headerFrom(raw) !== from.toLowerCase()) throw smtpError("Not sent: the From header must match the sender address", 550);
-    const reservation = limits.reserve(app, to.length);
+    const reservation = limits.reserve(app, kind, to.length);
     if (!reservation.ok) {
-      log({ app, recipients: to.length, bytes: raw.length, result: "refused", reason: reservation.reason });
+      log({ app, kind, recipients: to.length, bytes: raw.length, result: "refused", reason: reservation.reason });
       // Permanent: retrying today would only be refused again.
       throw smtpError(`Not sent: ${reservation.reason}`, 550);
     }
     try {
       await deliver({ from, to }, raw);
-      log({ app, recipients: to.length, bytes: raw.length, result: "sent" });
+      log({ app, kind, recipients: to.length, bytes: raw.length, result: "sent" });
     } catch (error) {
-      limits.release(app, to.length);
-      log({ app, recipients: to.length, bytes: raw.length, result: "failed", reason: (error as Error).message });
+      limits.release(app, kind, to.length);
+      log({ app, kind, recipients: to.length, bytes: raw.length, result: "failed", reason: (error as Error).message });
       throw smtpError("Delivery failed, try again later", 451);
     }
   }

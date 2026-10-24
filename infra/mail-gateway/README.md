@@ -11,8 +11,12 @@ Every email the platform sends passes through here: Appwrite's account mails
   header must match. Appwrite itself (`appwrite`) may use any allowed address,
   because it sends account mails for every project.
 - Daily caps count recipients, reset at Stockholm midnight:
-  `MAIL_DAILY_LIMIT` (all apps, default 1000) and `MAIL_APP_DAILY_LIMIT`
-  (per app, default 300). Over the cap the email is refused, not queued.
+  `MAIL_DAILY_LIMIT` (all apps, default 1000), `MAIL_APP_DAILY_LIMIT`
+  (per app, login codes and other one-person mail, default 300) and
+  `MAIL_APP_NEWS_DAILY_LIMIT` (per app, newsletters, default 500). Bulk sends
+  log in as `<app>:news`. Newsletters may fill at most
+  `MAIL_NEWS_SHARE_PERCENT` (default 70) of the total, so they never use up
+  the room login codes need. Over a cap the email is refused, not queued.
 - `DELIVERY=smtp` forwards to the local test inbox (Mailpit,
   http://localhost:8025). `DELIVERY=ses` sends through Amazon SES over HTTPS,
   which also works where outgoing SMTP is blocked (Railway Hobby).

@@ -29,7 +29,13 @@ export function loadConfig() {
     smtpPort: positiveInt("SMTP_PORT", 2525),
     httpPort: positiveInt("HTTP_PORT", 8080),
     dataFile: process.env.DATA_FILE ?? "/data/limits.sqlite",
-    caps: { total: positiveInt("MAIL_DAILY_LIMIT", 1000), perApp: positiveInt("MAIL_APP_DAILY_LIMIT", 300) },
+    caps: {
+      total: positiveInt("MAIL_DAILY_LIMIT", 1000),
+      perApp: positiveInt("MAIL_APP_DAILY_LIMIT", 300),
+      perAppNews: positiveInt("MAIL_APP_NEWS_DAILY_LIMIT", 500),
+      /** Share of the total that newsletters may fill, in percent. The rest is kept for login codes. */
+      newsShare: Math.min(positiveInt("MAIL_NEWS_SHARE_PERCENT", 70), 100) / 100,
+    },
     maxRecipients: positiveInt("MAX_RECIPIENTS", 50),
     maxBytes: positiveInt("MAX_BYTES", 10 * 1024 * 1024),
     /** Sender domains allowed in MAIL FROM. Empty allows any, for local testing only. */

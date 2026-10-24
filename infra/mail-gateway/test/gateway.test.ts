@@ -6,37 +6,54 @@ import { appPassword, headerFrom } from "../src/identity";
 import { Limits, stockholmDay } from "../src/limits";
 import { createSmtpServer } from "../src/server";
 
+const caps = (total: number, perApp: number, perAppNews = 100, newsShare = 1) => ({ total, perApp, perAppNews, newsShare });
+
 describe("Limits", () => {
   test("counts recipients per app and in total", () => {
-    const limits = new Limits(":memory:", { total: 5, perApp: 3 });
-    expect(limits.reserve("a", 3).ok).toBe(true);
-    expect(limits.reserve("a", 1)).toEqual({ ok: false, reason: "daily limit of 3 emails for a reached" });
-    expect(limits.reserve("b", 2).ok).toBe(true);
-    expect(limits.reserve("c", 1)).toEqual({ ok: false, reason: "daily limit of 5 emails for all apps reached" });
+    const limits = new Limits(":memory:", caps(5, 3));
+    expect(limits.reserve("a", "mail", 3).ok).toBe(true);
+    expect(limits.reserve("a", "mail", 1)).toEqual({ ok: false, reason: "daily limit of 3 emails for a reached" });
+    expect(limits.reserve("b", "mail", 2).ok).toBe(true);
+    expect(limits.reserve("c", "mail", 1)).toEqual({ ok: false, reason: "daily limit of 5 emails for all apps reached" });
     expect(limits.today().total).toBe(5);
   });
 
   test("a refused reservation counts nothing", () => {
-    const limits = new Limits(":memory:", { total: 10, perApp: 2 });
-    expect(limits.reserve("a", 3).ok).toBe(false);
+    const limits = new Limits(":memory:", caps(10, 2));
+    expect(limits.reserve("a", "mail", 3).ok).toBe(false);
     expect(limits.today().total).toBe(0);
   });
 
   test("release gives the cap back and never goes below zero", () => {
-    const limits = new Limits(":memory:", { total: 10, perApp: 2 });
-    limits.reserve("a", 2);
-    limits.release("a", 5);
-    expect(limits.today().apps.a).toBe(0);
-    expect(limits.reserve("a", 2).ok).toBe(true);
+    const limits = new Limits(":memory:", caps(10, 2));
+    limits.reserve("a", "mail", 2);
+    limits.release("a", "mail", 5);
+    expect(limits.today().apps.a.mail).toBe(0);
+    expect(limits.reserve("a", "mail", 2).ok).toBe(true);
   });
 
   test("resets at Stockholm midnight, not UTC midnight", () => {
-    const limits = new Limits(":memory:", { total: 1, perApp: 1 });
+    const limits = new Limits(":memory:", caps(1, 1));
     // 23:30 UTC on 1 July is 01:30 the next day in Stockholm (summer time).
     const lateUtc = new Date("2026-07-01T23:30:00Z");
     expect(stockholmDay(lateUtc)).toBe("2026-07-02");
-    expect(limits.reserve("a", 1, new Date("2026-07-01T21:00:00Z")).ok).toBe(true);
-    expect(limits.reserve("a", 1, lateUtc).ok).toBe(true);
+    expect(limits.reserve("a", "mail", 1, new Date("2026-07-01T21:00:00Z")).ok).toBe(true);
+    expect(limits.reserve("a", "mail", 1, lateUtc).ok).toBe(true);
+  });
+
+  test("a full newsletter send leaves room for login codes", () => {
+    const limits = new Limits(":memory:", caps(10, 5, 100, 0.7));
+    expect(limits.reserve("shop", "news", 7).ok).toBe(true);
+    expect(limits.reserve("shop", "news", 1).ok).toBe(false);
+    expect(limits.reserve("shop", "mail", 3).ok).toBe(true);
+    expect(limits.today().apps.shop).toEqual({ mail: 3, news: 7 });
+  });
+
+  test("newsletters and login codes have separate per-app caps", () => {
+    const limits = new Limits(":memory:", caps(100, 2, 5));
+    expect(limits.reserve("shop", "news", 5).ok).toBe(true);
+    expect(limits.reserve("shop", "mail", 2).ok).toBe(true);
+    expect(limits.reserve("shop", "mail", 1).ok).toBe(false);
   });
 });
 
@@ -46,7 +63,7 @@ const config: Config = {
   smtpPort: PORT,
   httpPort: 0,
   dataFile: ":memory:",
-  caps: { total: 4, perApp: 3 },
+  caps: caps(4, 3, 2, 0.5),
   maxRecipients: 3,
   maxBytes: 20_000,
   senderDomains: ["apps.example.com"],
@@ -74,11 +91,11 @@ const server = createSmtpServer(
 await new Promise<void>((resolve) => server.listen(PORT, resolve));
 afterAll(() => new Promise<void>((resolve) => server.close(() => resolve())));
 
-const client = (user: string, pass = appPassword(config.masterKey, user)) =>
+const client = (user: string, pass = appPassword(config.masterKey, user.split(":")[0])) =>
   nodemailer.createTransport({ host: "127.0.0.1", port: PORT, secure: false, ignoreTLS: true, auth: { user, pass } });
 
 const send = (user: string, to: string[], extra: Partial<SendMailOptions> = {}, pass?: string) =>
-  client(user, pass).sendMail({ from: `${user}@apps.example.com`, to, subject: "Hi", text: "Hello", ...extra });
+  client(user, pass).sendMail({ from: `${user.split(":")[0]}@apps.example.com`, to, subject: "Hi", text: "Hello", ...extra });
 
 const smtpCode = (promise: Promise<unknown>) =>
   promise.then(
@@ -143,7 +160,7 @@ describe("SMTP gateway", () => {
   test("delivers and counts per app", async () => {
     await send("todo", ["a@x.com", "b@x.com"]);
     expect(delivered).toEqual([{ from: "todo@apps.example.com", to: ["a@x.com", "b@x.com"] }]);
-    expect(limits.today().apps.todo).toBe(2);
+    expect(limits.today().apps.todo.mail).toBe(2);
   });
 
   test("refuses a wrong password", async () => {
@@ -174,6 +191,17 @@ describe("SMTP gateway", () => {
   test("Appwrite itself may send account mails from any allowed address", async () => {
     await send("appwrite", ["a@x.com"], { from: "Todo <noreply@apps.example.com>" });
     expect(delivered[0].from).toBe("noreply@apps.example.com");
+  });
+
+  test("bulk sends log in as <app>:news and are counted apart", async () => {
+    await send("shop:news", ["a@x.com", "b@x.com"]);
+    expect(await smtpCode(send("shop:news", ["c@x.com"]))).toBe(550);
+    await send("shop", ["c@x.com"]);
+    expect(limits.today().apps.shop).toEqual({ mail: 1, news: 2 });
+  });
+
+  test("refuses unknown mail kinds", async () => {
+    expect(await smtpCode(send("shop:promo", ["a@x.com"], {}, appPassword(config.masterKey, "shop")))).toBe(535);
   });
 
   test("refuses usernames that are not app ids", async () => {
@@ -210,6 +238,6 @@ describe("SMTP gateway", () => {
   test("a failed delivery asks the sender to retry and does not use the cap", async () => {
     failNext = true;
     expect(await smtpCode(send("todo", ["a@x.com"]))).toBe(451);
-    expect(limits.today().apps.todo).toBe(0);
+    expect(limits.today().apps.todo?.mail ?? 0).toBe(0);
   });
 });
