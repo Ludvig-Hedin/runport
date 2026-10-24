@@ -24,8 +24,8 @@ export function loadConfig() {
   const delivery = process.env.DELIVERY ?? "smtp";
   if (delivery !== "ses" && delivery !== "smtp") throw new Error(`DELIVERY must be "ses" or "smtp", got "${delivery}".`);
   return {
-    /** Shared password every sender uses. The username names the app. */
-    password: required("GATEWAY_PASSWORD"),
+    /** Each app's SMTP password is derived from this key, see identity.ts. */
+    masterKey: required("GATEWAY_MASTER_KEY"),
     smtpPort: positiveInt("SMTP_PORT", 2525),
     httpPort: positiveInt("HTTP_PORT", 8080),
     dataFile: process.env.DATA_FILE ?? "/data/limits.sqlite",

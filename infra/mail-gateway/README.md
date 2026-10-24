@@ -3,8 +3,13 @@
 Every email the platform sends passes through here: Appwrite's account mails
 (login codes, verification, password reset) and each app's own messages.
 
-- Senders log in over SMTP with their app id as username and the shared
-  password (Keychain `builder-platform` / `mail-gateway-password`).
+- Senders log in over SMTP with their app id as username. Each app has its
+  own password, an HMAC of the app id with the master key (Keychain
+  `builder-platform` / `mail-gateway-master-key`, env `GATEWAY_MASTER_KEY`).
+  See `src/identity.ts`.
+- An app may only send as `<app id>@<allowed domain>`, and the visible From
+  header must match. Appwrite itself (`appwrite`) may use any allowed address,
+  because it sends account mails for every project.
 - Daily caps count recipients, reset at Stockholm midnight:
   `MAIL_DAILY_LIMIT` (all apps, default 1000) and `MAIL_APP_DAILY_LIMIT`
   (per app, default 300). Over the cap the email is refused, not queued.

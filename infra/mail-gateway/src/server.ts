@@ -1,27 +1,17 @@
-import { timingSafeEqual } from "node:crypto";
 import { SMTPServer, type SMTPServerSession } from "smtp-server";
 import type { Config } from "./config";
 import type { Deliver } from "./deliver";
+import { APP_ID, headerFrom, passwordMatches, senderProblem } from "./identity";
 import type { Limits } from "./limits";
 
 // SMTP entry point for every email the platform sends: Appwrite's own account
 // mails and every app's messages. Each sender logs in with its app id as the
 // username, so caps and logs are per app.
 
-const APP_ID = /^[a-z0-9][a-z0-9-]{0,35}$/;
-
 type Log = (entry: Record<string, unknown>) => void;
 export const jsonLog: Log = (entry) => console.log(JSON.stringify({ time: new Date().toISOString(), ...entry }));
 
-const sameSecret = (a: string, b: string) => {
-  const x = Buffer.from(a);
-  const y = Buffer.from(b);
-  return x.length === y.length && timingSafeEqual(x, y);
-};
-
 const smtpError = (message: string, responseCode: number) => Object.assign(new Error(message), { responseCode });
-
-const domainOf = (address: string) => address.slice(address.lastIndexOf("@") + 1).toLowerCase();
 
 export function createSmtpServer(config: Config, limits: Limits, deliver: Deliver, log: Log = jsonLog): SMTPServer {
   return new SMTPServer({
@@ -36,7 +26,7 @@ export function createSmtpServer(config: Config, limits: Limits, deliver: Delive
 
     onAuth(auth, _session, callback) {
       const app = (auth.username ?? "").toLowerCase();
-      if (!APP_ID.test(app) || !sameSecret(auth.password ?? "", config.password)) {
+      if (!APP_ID.test(app) || !passwordMatches(config.masterKey, app, auth.password ?? "")) {
         return callback(smtpError("Invalid login", 535));
       }
       callback(null, { user: app });
@@ -44,18 +34,23 @@ export function createSmtpServer(config: Config, limits: Limits, deliver: Delive
 
     onMailFrom(address, session, callback) {
       if (!session.user) return callback(smtpError("Log in first", 530));
-      if (config.senderDomains.length > 0 && !config.senderDomains.includes(domainOf(address.address))) {
-        return callback(smtpError(`Sender domain ${domainOf(address.address)} is not allowed`, 553));
-      }
-      callback();
+      const problem = senderProblem(String(session.user), address.address, config.senderDomains);
+      callback(problem ? smtpError(problem, 553) : undefined);
     },
 
     onData(stream, session, callback) {
+      // Stop keeping chunks once over the limit, but keep reading so the
+      // client gets a clean refusal instead of a dropped connection.
       const chunks: Buffer[] = [];
-      stream.on("data", (chunk: Buffer) => chunks.push(chunk));
+      let bytes = 0;
+      stream.on("data", (chunk: Buffer) => {
+        bytes += chunk.length;
+        if (bytes <= config.maxBytes) chunks.push(chunk);
+        else chunks.length = 0;
+      });
       stream.on("error", (error) => callback(error));
       stream.on("end", () => {
-        if (stream.sizeExceeded) return callback(smtpError(`Email is larger than ${config.maxBytes} bytes`, 552));
+        if (stream.sizeExceeded || bytes > config.maxBytes) return callback(smtpError(`Email is larger than ${config.maxBytes} bytes`, 552));
         handle(session, Buffer.concat(chunks)).then(
           () => callback(),
           (error: Error) => callback(error),
@@ -71,6 +66,9 @@ export function createSmtpServer(config: Config, limits: Limits, deliver: Delive
     // Checked here rather than per recipient: refusing only the extra
     // recipients would deliver to some and silently drop the rest.
     if (to.length > config.maxRecipients) throw smtpError(`Not sent: at most ${config.maxRecipients} recipients per email`, 550);
+    // The visible From must be the checked envelope sender, or an app could
+    // pass the envelope check and still show someone else's address.
+    if (headerFrom(raw) !== from.toLowerCase()) throw smtpError("Not sent: the From header must match the sender address", 550);
     const reservation = limits.reserve(app, to.length);
     if (!reservation.ok) {
       log({ app, recipients: to.length, bytes: raw.length, result: "refused", reason: reservation.reason });

@@ -2,6 +2,7 @@ import { afterAll, beforeEach, describe, expect, test } from "bun:test";
 import nodemailer, { type SendMailOptions } from "nodemailer";
 import type { Config } from "../src/config";
 import type { Envelope } from "../src/deliver";
+import { appPassword, headerFrom } from "../src/identity";
 import { Limits, stockholmDay } from "../src/limits";
 import { createSmtpServer } from "../src/server";
 
@@ -41,7 +42,7 @@ describe("Limits", () => {
 
 const PORT = 25250;
 const config: Config = {
-  password: "secret-test",
+  masterKey: "master-test",
   smtpPort: PORT,
   httpPort: 0,
   dataFile: ":memory:",
@@ -73,17 +74,34 @@ const server = createSmtpServer(
 await new Promise<void>((resolve) => server.listen(PORT, resolve));
 afterAll(() => new Promise<void>((resolve) => server.close(() => resolve())));
 
-const client = (user: string, pass = config.password) =>
+const client = (user: string, pass = appPassword(config.masterKey, user)) =>
   nodemailer.createTransport({ host: "127.0.0.1", port: PORT, secure: false, ignoreTLS: true, auth: { user, pass } });
 
 const send = (user: string, to: string[], extra: Partial<SendMailOptions> = {}, pass?: string) =>
-  client(user, pass).sendMail({ from: "noreply@apps.example.com", to, subject: "Hi", text: "Hello", ...extra });
+  client(user, pass).sendMail({ from: `${user}@apps.example.com`, to, subject: "Hi", text: "Hello", ...extra });
 
 const smtpCode = (promise: Promise<unknown>) =>
   promise.then(
     () => 0,
     (e: { responseCode?: number }) => e.responseCode ?? -1,
   );
+
+describe("headerFrom", () => {
+  const msg = (head: string) => Buffer.from(`${head}\r\n\r\nbody`);
+  test("reads named, bare and folded addresses", () => {
+    expect(headerFrom(msg("From: Todo <Todo@Apps.example.com>"))).toBe("todo@apps.example.com");
+    expect(headerFrom(msg("From: todo@apps.example.com"))).toBe("todo@apps.example.com");
+    expect(headerFrom(msg("Subject: x\r\nFrom: \"Todo\"\r\n <todo@apps.example.com>"))).toBe("todo@apps.example.com");
+  });
+  test("rejects missing, repeated or multi-address From", () => {
+    expect(headerFrom(msg("Subject: x"))).toBeNull();
+    expect(headerFrom(msg("From: a@x.com\r\nFrom: b@x.com"))).toBeNull();
+    expect(headerFrom(msg("From: <a@x.com>, <b@x.com>"))).toBeNull();
+  });
+  test("ignores From lines in the body", () => {
+    expect(headerFrom(Buffer.from("Subject: x\r\n\r\nFrom: a@x.com"))).toBeNull();
+  });
+});
 
 describe("SMTP gateway", () => {
   beforeEach(() => {
@@ -94,13 +112,38 @@ describe("SMTP gateway", () => {
 
   test("delivers and counts per app", async () => {
     await send("todo", ["a@x.com", "b@x.com"]);
-    expect(delivered).toEqual([{ from: "noreply@apps.example.com", to: ["a@x.com", "b@x.com"] }]);
+    expect(delivered).toEqual([{ from: "todo@apps.example.com", to: ["a@x.com", "b@x.com"] }]);
     expect(limits.today().apps.todo).toBe(2);
   });
 
   test("refuses a wrong password", async () => {
     expect(await smtpCode(send("todo", ["a@x.com"], {}, "wrong"))).toBe(535);
     expect(delivered).toEqual([]);
+  });
+
+  test("one app's password does not work for another app", async () => {
+    expect(await smtpCode(send("shop", ["a@x.com"], {}, appPassword(config.masterKey, "todo")))).toBe(535);
+  });
+
+  test("an app may only send as itself", async () => {
+    expect(await smtpCode(send("todo", ["a@x.com"], { from: "shop@apps.example.com" }))).toBe(553);
+  });
+
+  test("the visible From must match the sender", async () => {
+    const mismatch = client("todo").sendMail({
+      envelope: { from: "todo@apps.example.com", to: ["a@x.com"] },
+      from: "Bank <security@apps.example.com>",
+      to: "a@x.com",
+      subject: "Hi",
+      text: "Hello",
+    });
+    expect(await smtpCode(mismatch)).toBe(550);
+    expect(delivered).toEqual([]);
+  });
+
+  test("Appwrite itself may send account mails from any allowed address", async () => {
+    await send("appwrite", ["a@x.com"], { from: "Todo <noreply@apps.example.com>" });
+    expect(delivered[0].from).toBe("noreply@apps.example.com");
   });
 
   test("refuses usernames that are not app ids", async () => {

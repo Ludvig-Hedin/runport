@@ -31,7 +31,7 @@ services:
     volumes:
       - appwrite-mail-gateway:/data
     environment:
-      - GATEWAY_PASSWORD=${MAIL_GATEWAY_PASSWORD}
+      - GATEWAY_MASTER_KEY=${MAIL_GATEWAY_MASTER_KEY}
       - DELIVERY=${MAIL_DELIVERY:-smtp}
       - MAIL_DAILY_LIMIT=${MAIL_DAILY_LIMIT:-1000}
       - MAIL_APP_DAILY_LIMIT=${MAIL_APP_DAILY_LIMIT:-300}
