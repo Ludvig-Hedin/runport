@@ -2,7 +2,7 @@
 
 Project `sitedock` (Amsterdam). Public entry: the `router` service
 (https://router-production-146b.up.railway.app, later
-https://admin.apps.ludvighedin.com): `/v1` is the Appwrite API, everything
+https://admin.runport.app): `/v1` is the Appwrite API, everything
 else the admin. The admin sleeps when idle; the router waits for it to wake.
 
 - `.railway/railway.ts` describes every service, volume and the file bucket.
@@ -14,7 +14,7 @@ else the admin. The admin sleeps when idle; the router waits for it to wake.
   for the gateway, `ops` for both `backup` and `monitor`.
 - Mail: the gateway posts to the `sitedock-mail` Worker
   (`infra/cloudflare-mail`, deploy with `bunx wrangler deploy`), which sends
-  with Cloudflare Email Sending from apps.ludvighedin.com. Transactional mail
+  with Cloudflare Email Sending from runport.app (apps.ludvighedin.com still allowed). Transactional mail
   only; newsletters need another path.
 - `backup` runs nightly at 01:00 UTC: pg_dump to `backups/` in the bucket,
   kept 14 days. `monitor` runs every 5 minutes and emails

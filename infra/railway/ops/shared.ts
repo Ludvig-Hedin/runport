@@ -21,13 +21,13 @@ export function required(name: string): string {
  * the mail gateway, so alerts still go out when the gateway is the problem.
  */
 export async function alertOwner(subject: string, text: string): Promise<void> {
-  const from = "alerts@apps.ludvighedin.com";
+  const from = "alerts@runport.app";
   const to = required("ALERT_TO");
   const raw = [
     `From: Sitedock <${from}>`,
     `To: ${to}`,
     `Subject: ${subject}`,
-    `Message-ID: <${crypto.randomUUID()}@apps.ludvighedin.com>`,
+    `Message-ID: <${crypto.randomUUID()}@runport.app>`,
     `Date: ${new Date().toUTCString()}`,
     "MIME-Version: 1.0",
     "Content-Type: text/plain; charset=utf-8",

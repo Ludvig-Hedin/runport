@@ -50,9 +50,10 @@ accounts and a database, without signing up for anything per app.
 - Public open-source repo, MIT license, Appwrite credited in NOTICE.
 - New sites and apps are not indexed by search engines until he turns it on.
 - Mail delivery: Cloudflare Email Sending (decided 2026-10-24, replaces
-  Amazon SES: "vill inte använda aws"). Live for apps.ludvighedin.com.
-- Online addresses: `*.apps.ludvighedin.com` for now; he may buy a domain
-  for Sitedock itself later.
+  Amazon SES: "vill inte använda aws"). Live for apps.ludvighedin.com, moving to runport.app.
+- Online addresses: the owner bought runport.app (2026-10-25). Admin at
+  admin.runport.app, apps at `<slug>.runport.app`, mail from
+  `<slug>@runport.app`, following his rule that mail uses the apps' domain.
 - Admin look: neutral dark mode, blue instead of Appwrite pink, no all-caps
   labels (done 2026-10-24). Sidebar cleanup and admin toggles proposed, not
   yet approved.

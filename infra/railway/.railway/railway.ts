@@ -116,7 +116,7 @@ export default defineRailway(() => {
       MAIL_APP_DAILY_LIMIT: "300",
       MAIL_APP_NEWS_DAILY_LIMIT: "500",
       MAIL_NEWS_SHARE_PERCENT: "70",
-      SENDER_DOMAINS: "apps.ludvighedin.com",
+      SENDER_DOMAINS: "runport.app,apps.ludvighedin.com",
     },
   });
 

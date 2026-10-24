@@ -13,7 +13,7 @@ export const config = {
   /** macOS Keychain service that holds the Appwrite owner login. */
   keychainService: process.env.PLATFORM_KEYCHAIN_SERVICE ?? "builder-platform",
   /** Apps send as <slug>@<mailDomain> through the mail gateway (infra/mail-gateway). */
-  mailDomain: process.env.PLATFORM_MAIL_DOMAIN ?? "apps.ludvighedin.com",
+  mailDomain: process.env.PLATFORM_MAIL_DOMAIN ?? "runport.app",
   /** The gateway as Appwrite reaches it on its internal network. */
   mailGateway: { host: "mail-gateway", port: 2525 },
   /** Local dev ports handed out to apps, one per app. */

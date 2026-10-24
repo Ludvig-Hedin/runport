@@ -5,6 +5,6 @@
   "main": "src/index.ts",
   "compatibility_date": "2026-10-01",
   "send_email": [{ "name": "EMAIL" }],
-  "vars": { "SENDER_DOMAIN": "apps.ludvighedin.com" },
+  "vars": { "SENDER_DOMAINS": "runport.app,apps.ludvighedin.com" },
   "observability": { "enabled": true }
 }

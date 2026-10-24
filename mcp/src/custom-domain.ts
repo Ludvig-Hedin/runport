@@ -1,4 +1,4 @@
-// Gives a Railway service its own address, for example todo.apps.ludvighedin.com:
+// Gives a Railway service its own address, for example todo.runport.app:
 // registers it on Railway, then creates the DNS records in Cloudflare.
 // Run from anywhere:
 //   bun src/custom-domain.ts <domain> <service> <port> <railway-linked folder>

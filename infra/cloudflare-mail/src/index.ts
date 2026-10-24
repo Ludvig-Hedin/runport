@@ -10,7 +10,8 @@ import { EmailMessage } from "cloudflare:email";
 interface Env {
   EMAIL: SendEmail;
   SEND_TOKEN: string;
-  SENDER_DOMAIN: string;
+  /** Comma-separated domains apps may send from. */
+  SENDER_DOMAINS: string;
 }
 
 const MAX_BYTES = 10 * 1024 * 1024;
@@ -44,7 +45,8 @@ export default {
     } catch {
       return json(400, { error: "bad recipients" });
     }
-    if (!ADDRESS.test(from) || !from.endsWith(`@${env.SENDER_DOMAIN}`)) return json(400, { error: "sender not allowed" });
+    const domains = env.SENDER_DOMAINS.split(",").map((d) => d.trim().toLowerCase()).filter(Boolean);
+    if (!ADDRESS.test(from) || !domains.includes(from.slice(from.lastIndexOf("@") + 1))) return json(400, { error: "sender not allowed" });
     if (!Array.isArray(to) || to.length === 0 || to.length > MAX_RECIPIENTS || !to.every((t) => typeof t === "string" && ADDRESS.test(t))) {
       return json(400, { error: "bad recipients" });
     }
