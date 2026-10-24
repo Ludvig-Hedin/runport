@@ -111,6 +111,9 @@ describe("headerFrom", () => {
     expect(headerFrom(msg("From: security\uFF20bank.com <todo@apps.example.com>"))).toBeNull();
     expect(headerFrom(msg("From: security\uFE6Bbank.com <todo@apps.example.com>"))).toBeNull();
     expect(headerFrom(msg("From: =?x-unknown?B?YQ==?= <todo@apps.example.com>"))).toBeNull();
+    expect(headerFrom(msg("From: =?UTF-8?B?c2VjdXJpdHlAYmFuay5jb20?= <todo@apps.example.com>"))).toBeNull();
+    expect(headerFrom(msg("From: =?UTF-8?B?QUJD*?= <todo@apps.example.com>"))).toBeNull();
+    expect(headerFrom(msg("From: =?UTF-8?Z?abc?= <todo@apps.example.com>"))).toBeNull();
   });
   test("keeps ordinary non-English names", () => {
     expect(headerFrom(msg("From: =?UTF-8?Q?=C3=85sas_Caf=C3=A9?= <todo@apps.example.com>"))).toBe("todo@apps.example.com");

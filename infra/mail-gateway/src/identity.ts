@@ -37,10 +37,14 @@ export function senderProblem(app: string, address: string, allowedDomains: stri
  * Returns null for a charset or encoding we cannot decode, so the caller
  * refuses instead of guessing.
  */
+const STRICT_BASE64 = /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/;
+
 export function decodeWords(value: string): string | null {
   let failed = false;
   const decoded = value.replace(/=\?([^?\s]+)\?([BbQq])\?([^?\s]*)\?=/g, (_m, charset: string, enc: string, text: string) => {
     try {
+      // Lenient base64 decoding differs between clients; refuse anything odd.
+      if (enc.toUpperCase() === "B" && !STRICT_BASE64.test(text)) throw new Error("bad base64");
       const bytes =
         enc.toUpperCase() === "B"
           ? Buffer.from(text, "base64")
@@ -54,7 +58,8 @@ export function decodeWords(value: string): string | null {
       return "";
     }
   });
-  return failed ? null : decoded;
+  // Leftover "=?" means a word we did not recognise; a client might.
+  return failed || decoded.includes("=?") ? null : decoded;
 }
 
 /** True when a display name could pass for an address, including lookalike "@" characters. */
