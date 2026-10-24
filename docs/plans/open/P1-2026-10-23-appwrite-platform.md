@@ -44,6 +44,13 @@ accounts and a database, without signing up for anything per app.
 - Sign-in in every new app: one-time code by email by default, switchable to
   email and password. Google and GitHub sign-in as well.
 - Only Ludvig logs in to the admin.
+- Name: Sitedock (chosen 2026-10-24 from his shortlist "appdock or Sitedock";
+  Appdock is a registered software trademark and has no free domain).
+  sitedock.ai was unregistered on 2026-10-24; buying it needs his approval.
+- Public open-source repo, MIT license, Appwrite credited in NOTICE.
+- New sites and apps are not indexed by search engines until he turns it on.
+- Mail delivery: Amazon SES, set up by him later. Until then the local test
+  inbox.
 - Admin look: neutral dark mode, blue instead of Appwrite pink, no all-caps
   labels (done 2026-10-24). Sidebar cleanup and admin toggles proposed, not
   yet approved.

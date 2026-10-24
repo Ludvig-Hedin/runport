@@ -1,5 +1,5 @@
 
-/* builder-platform theme (infra/appwrite/console-theme). */
+/* Sitedock theme (infra/appwrite/console-theme). */
 html:not(.dark) {
   --chart-brand: oklch(0.55 0.2 264);
 }

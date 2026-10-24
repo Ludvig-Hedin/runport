@@ -1,8 +1,8 @@
 {
-  "name": "builder-platform-mcp",
+  "name": "sitedock-mcp",
   "private": true,
   "type": "module",
-  "bin": { "platform-mcp": "src/index.ts" },
+  "bin": { "sitedock-mcp": "src/index.ts" },
   "scripts": {
     "start": "bun src/index.ts",
     "test": "bun test",

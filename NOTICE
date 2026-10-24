@@ -1,0 +1,24 @@
+Sitedock
+Copyright (c) 2026 Ludvig Hedin. Licensed under the MIT License (see LICENSE).
+
+Sitedock is not affiliated with or endorsed by Appwrite Code Ltd.
+"Appwrite" is a trademark of Appwrite Code Ltd. and is used here only to say
+which software Sitedock runs on.
+
+Third-party software
+--------------------
+Sitedock does not include or redistribute the source code below. It starts
+these projects from their official, unmodified Docker images or installs them
+as npm packages, under their own licenses:
+
+- Appwrite server (https://github.com/appwrite/appwrite), BSD-3-Clause.
+- Appwrite console image (appwrite/new), distributed by Appwrite with its
+  self-hosted installer. Its source and license are not published.
+  infra/appwrite/console-theme changes colours in a copy built on your own
+  machine for your own use. Sitedock never publishes or deploys that image.
+- Mailpit (https://github.com/axllent/mailpit), MIT. Local test inbox only.
+- smtp-server and nodemailer (https://nodemailer.com), MIT-0.
+- AWS SDK for JavaScript v3 (https://github.com/aws/aws-sdk-js-v3), Apache-2.0.
+- Model Context Protocol TypeScript SDK, MIT. zod, MIT.
+- Next.js, React and node-appwrite in the starter kit, under their own licenses
+  (MIT and BSD-3-Clause).

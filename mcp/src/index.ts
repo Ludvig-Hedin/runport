@@ -5,7 +5,7 @@ import { z } from "zod";
 import { createApp, deleteApp, listApps } from "./apps";
 import { logAction } from "./log";
 
-const server = new McpServer({ name: "platform", version: "0.1.0" });
+const server = new McpServer({ name: "sitedock", version: "0.1.0" });
 
 type ToolResult = { content: { type: "text"; text: string }[]; isError?: boolean };
 
