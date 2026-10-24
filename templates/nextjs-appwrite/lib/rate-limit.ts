@@ -27,14 +27,12 @@ export function clear(key: string): void {
 }
 
 /**
- * The visitor's address as the host's proxy saw it. The last X-Forwarded-For
- * entry is the one the proxy added; earlier ones can be made up by the client.
+ * The visitor's address as the host's proxy saw it. Only the last
+ * X-Forwarded-For entry is trusted: the proxy appends it, while earlier
+ * entries and X-Real-IP can be sent by the client itself.
  */
 export async function clientIp(): Promise<string> {
-  const h = await headers();
-  const real = h.get("x-real-ip");
-  if (real) return real.trim();
-  const forwarded = h.get("x-forwarded-for")?.split(",").map((s) => s.trim()).filter(Boolean);
+  const forwarded = (await headers()).get("x-forwarded-for")?.split(",").map((s) => s.trim()).filter(Boolean);
   return forwarded?.at(-1) ?? "unknown";
 }
 

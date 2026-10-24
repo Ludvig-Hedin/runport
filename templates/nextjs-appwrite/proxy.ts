@@ -5,7 +5,7 @@ import { safeEqual, unlockCookieName, unlockToken } from "@/lib/site-lock";
 // Runs before every page and route. It locks the site when SITE_PASSWORD is
 // set and tells search engines to stay away unless indexing is allowed.
 
-const OPEN_PATHS = new Set(["/unlock", "/robots.txt", "/favicon.ico", "/manifest.webmanifest"]);
+const OPEN_PATHS = new Set(["/unlock", "/unlock/submit", "/robots.txt", "/favicon.ico", "/manifest.webmanifest"]);
 const ICON_PATH = /^\/(apple-)?icon\d*(\.\w+)?$/;
 
 function isOpen(pathname: string): boolean {
@@ -25,7 +25,13 @@ function withRobots(response: NextResponse): NextResponse {
 export async function proxy(request: NextRequest) {
   const password = sitePassword();
   const { pathname, search } = request.nextUrl;
-  if (password && !isOpen(pathname) && !(await isUnlocked(request, password))) {
+  const locked = password ? !(await isUnlocked(request, password)) : false;
+  // Server actions can be posted to any path, the open ones included, so a
+  // locked site refuses them all. The unlock form uses a plain route instead.
+  if (locked && request.headers.has("next-action")) {
+    return withRobots(new NextResponse("Locked", { status: 403 }));
+  }
+  if (locked && !isOpen(pathname)) {
     const unlock = request.nextUrl.clone();
     unlock.pathname = "/unlock";
     unlock.search = `?next=${encodeURIComponent(pathname + search)}`;

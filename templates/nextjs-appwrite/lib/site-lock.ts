@@ -45,7 +45,10 @@ export function safeNextPath(value: string | null | undefined): string {
   try {
     const url = new URL(value, "http://same.site");
     if (url.origin !== "http://same.site" || url.pathname === "/unlock") return "/";
-    return url.pathname + url.search + url.hash;
+    // Check the result too: "/.//evil.example" parses to "//evil.example",
+    // which a browser would treat as another site.
+    const path = url.pathname + url.search + url.hash;
+    return path.startsWith("//") || path.startsWith("/\\") ? "/" : path;
   } catch {
     return "/";
   }
