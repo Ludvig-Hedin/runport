@@ -1,0 +1,31 @@
+# Single public entry for Appwrite on Railway, mirroring the local Traefik
+# rules: realtime, then the API, then the admin for everything else.
+{
+	admin off
+	auto_https off
+	servers {
+		trusted_proxies static private_ranges
+	}
+}
+
+:{$PORT:8080} {
+	handle /health {
+		respond "ok" 200
+	}
+	# Test inbox, password protected by Mailpit itself. Remove with Mailpit.
+	handle /_mail* {
+		reverse_proxy mailpit.railway.internal:8025
+	}
+	handle /v1/realtime* {
+		reverse_proxy appwrite-realtime.railway.internal:80
+	}
+	handle /v1/* {
+		reverse_proxy appwrite.railway.internal:80
+	}
+	handle /.well-known/* {
+		reverse_proxy appwrite.railway.internal:80
+	}
+	handle {
+		reverse_proxy appwrite-console.railway.internal:3000
+	}
+}
