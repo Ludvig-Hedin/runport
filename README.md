@@ -13,8 +13,9 @@ Vercel, Clerk, Convex or Resend.
   password, plus Google and GitHub sign-in.
 - **Database, files and live updates** per app, on self-hosted
   [Appwrite](https://github.com/appwrite/appwrite).
-- **Email** through a small gateway with hard daily caps, delivered by Amazon
-  SES. Newsletters can never use up the room login codes need.
+- **Email** through a small gateway with hard daily caps, delivered by
+  Cloudflare Email Sending. Newsletters can never use up the room login codes
+  need.
 - **Websites too:** any Next.js site, with a password lock and search engine
   indexing off until you turn it on.
 - **Agent first:** an MCP tool (`sitedock`) creates an app, its project, keys,
@@ -27,16 +28,20 @@ Vercel, Clerk, Convex or Resend.
 | Appwrite on your Mac, login, data per user, files | Works, tested end to end |
 | `create_app` MCP tool | Works locally |
 | Mail gateway with caps, local test inbox | Works locally, 31 tests |
-| Amazon SES delivery | Built, waiting for an AWS account; a protected test inbox meanwhile |
+| Mail delivery (Cloudflare) | Works online for login codes and other app mail |
 | Hosting online (Railway) | Appwrite, mail gateway and one app online, tested end to end |
+| Backups and outage alerts | Nightly database backup kept 14 days; email alerts every 5 minutes |
+| Own addresses (`*.apps.ludvighedin.com`) | Registered; waiting for DNS records |
+| Newsletters | Not yet: Cloudflare is for transactional mail |
 | Own admin panel | Not started; Appwrite's admin is used meanwhile |
-| Backups | Not started |
 
 ## Layout
 
 ```
 infra/appwrite/      Appwrite setup and local overrides
-infra/mail-gateway/  SMTP gateway: caps, sender checks, SES or test inbox
+infra/mail-gateway/  SMTP gateway: caps, sender checks, then Cloudflare
+infra/cloudflare-mail/ Worker that sends the gateway's mail with Cloudflare
+infra/railway/       the online setup as code, backup and outage jobs
 mcp/                 sitedock MCP server (Bun, TypeScript)
 templates/           Next.js starter kit copied into each new app
 docs/                plans, research and spike results

@@ -1,18 +1,30 @@
 # Sitedock on Railway
 
 Project `sitedock` (Amsterdam). Public entry: the `router` service
-(https://router-production-146b.up.railway.app): `/v1` is the Appwrite API,
-`/_mail` the password-protected test inbox, everything else the admin.
+(https://router-production-146b.up.railway.app, later
+https://admin.apps.ludvighedin.com): `/v1` is the Appwrite API, everything
+else the admin. The admin sleeps when idle; the router waits for it to wake.
 
 - `.railway/railway.ts` describes every service, volume and the file bucket.
 - `./apply.sh plan` previews, `./apply.sh apply` applies. Secrets come from the
   Keychain service `sitedock-prod` and are generated once if missing. Never
   run `railway config apply` directly: the SD_* secrets would be missing.
-- `router`, `clickhouse` and `mail-gateway` are built from this repo:
-  `railway up router --path-as-root --service router` (and the same for
-  `clickhouse` and `../mail-gateway`).
+- `router`, `mail-gateway`, `backup` and `monitor` are built from this repo:
+  `railway up router --path-as-root --service router`, `../mail-gateway`
+  for the gateway, `ops` for both `backup` and `monitor`.
+- Mail: the gateway posts to the `sitedock-mail` Worker
+  (`infra/cloudflare-mail`, deploy with `bunx wrangler deploy`), which sends
+  with Cloudflare Email Sending from apps.ludvighedin.com. Transactional mail
+  only; newsletters need another path.
+- `backup` runs nightly at 01:00 UTC: pg_dump to `backups/` in the bucket,
+  kept 14 days. `monitor` runs every 5 minutes and emails
+  ludvig@ludvighedin.com when the API, the gateway or the backup is wrong.
+  Usage statistics are off, so there is no ClickHouse.
 - Owner login for the admin: Keychain `sitedock-prod` / `owner-email` and
-  `owner-password`. Test inbox: user `ludvig`, password in `mailpit-password`.
+  `owner-password`.
+- Own addresses: `bun mcp/src/custom-domain.ts <domain> <service> <port>
+  <folder>` registers the domain on Railway and creates its DNS records with
+  the Keychain item `cloudflare-dns-token` (or prints them).
 - The encryption key (`openssl-key`) makes stored data readable. Losing it
   loses the data. Back it up outside this Mac.
 
