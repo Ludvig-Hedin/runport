@@ -50,6 +50,11 @@ brand/               logo
 
 Start with [infra/appwrite/README.md](infra/appwrite/README.md).
 
+Latest browser acceptance: [one app and one website, 2026-10-25](docs/spikes/2026-10-25-app-and-website-acceptance.md).
+The app passed real email signup, saved data, sign-out/sign-in and two users
+at once. The website passed local page, password-lock and indexing checks.
+Separate build/typecheck were blocked by the machine guard, not passed.
+
 ## License
 
 MIT, see [LICENSE](LICENSE). Third-party software and trademarks are listed in
