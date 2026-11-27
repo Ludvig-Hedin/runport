@@ -14,6 +14,7 @@ import { provisionAppAnalytics } from "./analytics-integration";
 const slug = assertAppwriteId(process.argv[2] ?? "");
 const app = (await loadRegistry()).apps.find((a) => a.slug === slug);
 if (!app) throw new Error(`No app called "${slug}" in ${config.appsDir}.`);
+if (app.setupPending) throw new Error(`App "${slug}" has unfinished setup. Retry create_app before deploying it.`);
 const admin = new AppwriteAdmin();
 
 /** Runs the Railway CLI in the app folder. Output is returned, never printed, as it can hold keys. */
