@@ -5,7 +5,7 @@ import { safeEqual, unlockCookieName, unlockToken } from "@/lib/site-lock";
 // Runs before every page and route. It locks the site when SITE_PASSWORD is
 // set and tells search engines to stay away unless indexing is allowed.
 
-const OPEN_PATHS = new Set(["/unlock", "/unlock/submit", "/robots.txt", "/favicon.ico", "/manifest.webmanifest"]);
+const OPEN_PATHS = new Set(["/unlock", "/unlock/submit", "/robots.txt", "/sitemap.xml", "/favicon.ico", "/manifest.webmanifest"]);
 const ICON_PATH = /^\/(apple-)?icon\d*(\.\w+)?$/;
 
 function isOpen(pathname: string): boolean {

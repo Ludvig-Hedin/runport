@@ -7,6 +7,7 @@ import { join } from "node:path";
 import { AppwriteAdmin } from "./appwrite-admin";
 import { config } from "./config";
 import { registerAppAlerts, webService, type RailwayProject } from "./deploy-app-alerts";
+import { formMailSettings } from "./form-mail";
 import { readSecret } from "./keychain";
 import { loadRegistry, upsertApp } from "./registry";
 import { assertAppwriteId } from "./slug";
@@ -88,12 +89,16 @@ console.log("tables ready");
 
 // 4. App settings on Railway, then deploy the folder.
 // Telemetry off, so an idle app sends nothing out and Railway can put it to sleep.
-const vars = { APPWRITE_ENDPOINT: config.endpoint, APPWRITE_PROJECT_ID: slug, APPWRITE_API_KEY: key, APP_URL: `https://${domain}`, PORT: String(app.port), NEXT_TELEMETRY_DISABLED: "1" };
+const mailUrl = process.env.PLATFORM_FORM_MAIL_URL ?? new URL("/runport-mail/form", config.endpoint).href;
+const { RUNPORT_FORM_MAIL_TOKEN, ...formMail } = await formMailSettings(slug, mailUrl, current.RUNPORT_FORM_OWNER_EMAIL, masterKey);
+const vars = { ...formMail, APPWRITE_ENDPOINT: config.endpoint, APPWRITE_PROJECT_ID: slug, APP_URL: `https://${domain}`, PORT: String(app.port), NEXT_TELEMETRY_DISABLED: "1" };
 const alertVars = await registerAppAlerts(slug, project, domain);
 await upsertApp({ ...app, alerts: alertVars.registration });
 const variableTarget = ["--service", "web", "--environment", "production", "--skip-deploys"];
 await railway(["variables", ...variableTarget, ...Object.entries({ ...vars, RUNPORT_ERROR_URL: alertVars.RUNPORT_ERROR_URL })
   .flatMap(([k, v]) => ["--set", `${k}=${v}`])], undefined, true);
-await railway(["variable", "set", ...variableTarget, "--stdin", "RUNPORT_ERROR_TOKEN"], alertVars.RUNPORT_ERROR_TOKEN, true);
+for (const [name, value] of Object.entries({ APPWRITE_API_KEY: key, RUNPORT_FORM_MAIL_TOKEN, RUNPORT_ERROR_TOKEN: alertVars.RUNPORT_ERROR_TOKEN })) {
+  await railway(["variable", "set", ...variableTarget, "--stdin", name], value, true);
+}
 await railway(["up", join(app.folder), "--path-as-root", "--service", "web", "--environment", "production", "--detach"]);
 console.log("deploy started");

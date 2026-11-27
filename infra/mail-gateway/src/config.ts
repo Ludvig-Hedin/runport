@@ -39,7 +39,10 @@ export function loadConfig() {
       loginReserve: positiveInt("MAIL_LOGIN_RESERVE", Math.floor(total / 10)),
       alertTotal: positiveInt("MAIL_ALERT_DAILY_LIMIT", 30),
       alertPerApp: positiveInt("MAIL_APP_ALERT_DAILY_LIMIT", 4),
-      /** Share of the total that newsletters may fill, in percent. The rest is kept for login codes. */
+      perAppForm: Math.min(positiveInt("MAIL_APP_FORM_DAILY_LIMIT", 50), 50),
+      perHourForm: Math.min(positiveInt("MAIL_APP_FORM_HOURLY_LIMIT", 10), 10),
+      formShare: Math.min(positiveInt("MAIL_FORM_SHARE_PERCENT", 10), 10) / 100,
+      /** Requested share for newsletters and forms together, capped at 70% by Limits. */
       newsShare: Math.min(positiveInt("MAIL_NEWS_SHARE_PERCENT", 70), 100) / 100,
     },
     maxRecipients: positiveInt("MAX_RECIPIENTS", 50),

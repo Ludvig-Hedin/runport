@@ -33,6 +33,8 @@ async function addColumn(tableId: string, column: ColumnSpec): Promise<void> {
   const base = { databaseId: DATABASE_ID, tableId, key: column.key, required: column.required };
   if (column.type === "varchar") {
     await tables.createVarcharColumn({ ...base, size: column.size });
+  } else if (column.type === "text") {
+    await tables.createTextColumn(base);
   } else {
     await tables.createBooleanColumn({ ...base, xdefault: column.required ? undefined : column.default });
   }
@@ -100,7 +102,7 @@ async function main(): Promise<void> {
       await tables.createTable({
         ...ids,
         name: table.name,
-        permissions: [Permission.create(Role.users())],
+        permissions: table.serverOnly ? [] : [Permission.create(Role.users())],
         rowSecurity: true,
       });
       console.log(`created table ${table.id}`);

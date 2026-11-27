@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import { createAppAlerts, monitorKey, registrationKey, reportKey } from "../src/app-alerts";
-import { DeliveryError } from "../src/deliver";
+import { cloudflareDelivery, DeliveryError, type Deliver } from "../src/deliver";
 import { Limits } from "../src/limits";
 
 const master = "isolated-test-secret";
@@ -17,18 +17,22 @@ const error = { source: "route", kind: "TypeError", fingerprint: "a".repeat(64) 
 const appKey = (app: string) => reportKey(master, app, deployment.serviceId, deployment.environmentId);
 const hour = 60 * 60_000;
 
-function fixture({ total = 100, alertPerApp = 10, recipient = owner } = {}) {
+function fixture({ total = 100, alertPerApp = 10, recipient = owner, delivery }:
+  { total?: number; alertPerApp?: number; recipient?: string; delivery?: Deliver } = {}) {
   let now = Date.UTC(2026, 10, 10, 9);
   let failure: Error | undefined;
   const inbox: Array<{ to: string[]; raw: string }> = [];
-  const limits = new Limits(":memory:", { total, perApp: 30, perAppNews: 30, newsShare: 0.7, alertTotal: 30, alertPerApp });
+  const limits = new Limits(":memory:", {
+    total, perApp: 30, perAppNews: 30, newsShare: 0.7, alertTotal: 30, alertPerApp,
+    perAppForm: 50, perHourForm: 10, formShare: 0.1,
+  });
   const handle = createAppAlerts({
     path: ":memory:", master, owner: recipient, limits, clock: () => now,
-    deliver: async ({ to }, raw) => {
+    deliver: delivery ?? (async ({ to }, raw) => {
       if (failure) throw failure;
       inbox.push({ to, raw: raw.toString() });
       return 1;
-    },
+    }),
     log: () => {},
   });
   const request = async (path: string, token: string, body?: unknown, method?: string) => handle(new Request("https://runport.invalid" + path, {
@@ -188,6 +192,33 @@ test("a confirmed temporary refusal releases capacity and backs off, while ambig
   await f.poll();
   expect(f.stats().total).toBe(2);
   expect(f.inbox).toHaveLength(1);
+});
+
+test("a Worker 200 with sent zero does not charge alert quota or mark the alert sent", async () => {
+  let attempts = 0;
+  using worker = Bun.serve({
+    hostname: "127.0.0.1",
+    port: 0,
+    fetch() {
+      attempts++;
+      return Response.json(attempts === 1
+        ? { sent: 0, failed: 1, codes: ["RATE_LIMIT"] }
+        : { sent: 1, failed: 0, codes: [] });
+    },
+  });
+  const f = fixture({ delivery: cloudflareDelivery(worker.url.href, "fixture-only") });
+  await f.register();
+  await f.report();
+  await f.poll();
+  expect(attempts).toBe(1);
+  expect(f.stats().total).toBe(0);
+  await f.poll();
+  expect(attempts).toBe(1);
+  f.tick(5 * 60_000);
+  await f.poll();
+  await f.poll();
+  expect(attempts).toBe(2);
+  expect(f.stats().total).toBe(1);
 });
 
 test("a backlog of over 50 events for a capped app cannot block another app", async () => {
