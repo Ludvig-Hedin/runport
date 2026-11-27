@@ -23,10 +23,10 @@ const signedIn = (iso: string) =>
   `Signed in ${new Date(iso).toLocaleString(undefined, { day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" })}`;
 
 /** The sign-in time in the visitor's own time zone. Rendered after mount, as the server cannot know it. */
-function SignedInAt({ iso }: { iso: string }) {
+function SignedInAt({ iso, id }: { iso: string; id: string }) {
   const [text, setText] = useState<string | null>(null);
   useEffect(() => setText(signedIn(iso)), [iso]);
-  return <p className="rp-device-detail">{text ?? "\u00a0"}</p>;
+  return <p id={id} className="rp-device-detail">{text ?? "\u00a0"}</p>;
 }
 
 type Props = {
@@ -166,11 +166,11 @@ function Devices({ appearance, devices }: { appearance?: Appearance; devices: De
                 {device.label}
                 {device.current && <span className="rp-badge">This device</span>}
               </p>
-              <SignedInAt iso={device.signedInAt} />
+              <SignedInAt iso={device.signedInAt} id={`rp-device-${device.id}`} />
             </div>
             {!device.current && (
               <button type="button" className={cls("link")} disabled={busy !== null} aria-busy={busy === device.id || undefined}
-                aria-label={`Sign out ${device.label}`}
+                aria-label={`Sign out ${device.label}`} aria-describedby={`rp-device-${device.id}`}
                 onClick={() => run(device.id)}>
                 {busy === device.id ? <Spinner /> : "Sign out"}
               </button>

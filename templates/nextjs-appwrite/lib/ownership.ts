@@ -2,7 +2,7 @@
 // account page (lib/account.ts) and `bun run setup`, so it imports nothing
 // Next-specific. Every caller passes an admin TablesDB client.
 
-import { Query, type TablesDB } from "node-appwrite";
+import { AppwriteException, Query, type TablesDB, type Users } from "node-appwrite";
 import { DATABASE_ID, OWNER_COLUMN, TABLES } from "./schema";
 
 /** Internal table of account deletions that still need their rows swept. No user can read it. */
@@ -67,21 +67,66 @@ export async function sweepOwnedRows(tables: TablesDB, userId: string): Promise<
   return left;
 }
 
-/** Finishes deletions that stopped after the account itself was removed. Safe to run any time. */
-export async function finishPendingDeletions(tables: TablesDB): Promise<number> {
+/** The email a deleted account is renamed to, so its real address is free and gone. */
+export const tombstoneEmail = (userId: string) => `deleted-${userId}@deleted.invalid`;
+
+/**
+ * Turns a blocked account into a permanent, anonymous placeholder: no email,
+ * name, preferences, labels, linked Google/GitHub sign-ins or sessions. The
+ * record itself is kept (blocked) so its id can never be given to someone
+ * new. Safe to run again.
+ */
+export async function tombstone(users: Users, userId: string): Promise<void> {
+  await users.deleteSessions({ userId });
+  const { identities } = await users.listIdentities({ queries: [Query.equal("userId", userId), Query.limit(100)] });
+  for (const identity of identities) await users.deleteIdentity({ identityId: identity.$id });
+  await users.updateEmail({ userId, email: tombstoneEmail(userId) });
+  await users.updateName({ userId, name: "" });
+  await users.updatePrefs({ userId, prefs: {} });
+  await users.updateLabels({ userId, labels: [] });
+}
+
+const SETTLE_MS = 60_000; // a record closes only after late in-flight writes could have landed
+
+/**
+ * Finishes account deletions that stopped part way. Only ever touches an
+ * account that is blocked (a deletion in progress or done); a record whose
+ * account is active again was rolled back and is just removed. Safe to run any time.
+ */
+export async function finishPendingDeletions(tables: TablesDB, users: Users): Promise<number> {
   const { rows } = await tables.listRows({ databaseId: DATABASE_ID, tableId: DELETIONS_TABLE, queries: [Query.limit(PAGE)] });
-  let finished = 0;
+  let closed = 0;
   for (const row of rows) {
-    const userId = String((row as unknown as Row).userId ?? "");
-    if (!userId) continue;
+    const record = row as unknown as Row;
+    const userId = String(record.userId ?? "");
+    const close = () => tables.deleteRow({ databaseId: DATABASE_ID, tableId: DELETIONS_TABLE, rowId: row.$id });
     try {
-      if ((await sweepOwnedRows(tables, userId)) === 0) {
-        await tables.deleteRow({ databaseId: DATABASE_ID, tableId: DELETIONS_TABLE, rowId: row.$id });
-        finished++;
+      const user = await users.get({ userId }).catch((error) => {
+        if (error instanceof AppwriteException && error.code === 404) return null;
+        throw error;
+      });
+      if (!user) {
+        // Never seen with this flow (accounts are kept as placeholders); without the
+        // account we cannot prove whose rows they are, so nothing is swept.
+        await close();
+        closed++;
+        continue;
+      }
+      if (user.status !== false) {
+        await close(); // rolled back: the account is in use again, touch nothing
+        closed++;
+        continue;
+      }
+      const left = await sweepOwnedRows(tables, userId);
+      await tombstone(users, userId);
+      const settled = Date.now() - Date.parse(String(record.blockedAt ?? "")) > SETTLE_MS;
+      if (left === 0 && settled) {
+        await close();
+        closed++;
       }
     } catch (error) {
-      console.error(`could not finish deleting rows for ${userId}`, error);
+      console.error(`could not finish deleting account ${userId}`, error);
     }
   }
-  return finished;
+  return closed;
 }
