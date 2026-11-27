@@ -35,6 +35,9 @@ export function loadConfig() {
       total: positiveInt("MAIL_DAILY_LIMIT", 1000),
       perApp: positiveInt("MAIL_APP_DAILY_LIMIT", 300),
       perAppNews: positiveInt("MAIL_APP_NEWS_DAILY_LIMIT", 500),
+      perAppForm: Math.min(positiveInt("MAIL_APP_FORM_DAILY_LIMIT", 50), 50),
+      perHourForm: Math.min(positiveInt("MAIL_APP_FORM_HOURLY_LIMIT", 10), 10),
+      formShare: Math.min(positiveInt("MAIL_FORM_SHARE_PERCENT", 10), 10) / 100,
       /** Share of the total that newsletters may fill, in percent. The rest is kept for login codes. */
       newsShare: Math.min(positiveInt("MAIL_NEWS_SHARE_PERCENT", 70), 100) / 100,
     },

@@ -23,8 +23,12 @@ Every email the platform sends passes through here: Appwrite's account mails
 - `SENDER_DOMAINS` limits who mail can claim to be from. Set it when SES is on.
 - `POST /runport-mail/form` accepts a single app-owner notification over
   HTTPS for hosted apps outside the private network. Its token is bound to
-  the app ID and one owner inbox. It submits through the same SMTP server
-  and daily cap. On Railway, deploy the gateway and router together to enable
+  the app ID and one owner inbox. Form notifications have their own limits of
+  10 per app per hour, 50 per app per day and 10% of the platform daily cap.
+  `MAIL_APP_FORM_HOURLY_LIMIT`, `MAIL_APP_FORM_DAILY_LIMIT` and `MAIL_FORM_SHARE_PERCENT`
+  can lower those limits. Newsletters and form notifications together can use
+  at most 70% of the daily capacity, leaving the rest for account mail.
+  On Railway, deploy the gateway and router together to enable
   this route. Local apps use the gateway bound to loopback port 8026.
 - `GET /stats` on port 8080 inside the network: today's counts per app.
 

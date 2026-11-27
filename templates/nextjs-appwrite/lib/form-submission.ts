@@ -1,8 +1,8 @@
 import "server-only";
 import { randomUUID } from "node:crypto";
-import { AppwriteException } from "node-appwrite";
+import { AppwriteException, type Models } from "node-appwrite";
 import { config, createAdminClient } from "@/lib/appwrite";
-import { looksLikeSpam, mailAddress, validateFields, type FormField, type FormState } from "@/lib/form-fields";
+import { linkLimitExceeded, looksLikeSpam, mailAddress, validateFields, type FormField, type FormState } from "@/lib/form-fields";
 import { issueFormToken, verifyFormToken } from "@/lib/form-token";
 import { allowed, take } from "@/lib/rate-limit";
 import { DATABASE_ID, FORM_SUBMISSIONS_TABLE } from "@/lib/schema";
@@ -11,7 +11,8 @@ import { appName } from "@/runport.config";
 const retry = "Your message could not be sent. Please try again.";
 const slowDown = "Too many attempts. Please try again in a few minutes.";
 const success = "Thanks. Your message was received.";
-const failure = (message: string): FormState => ({ status: "error", message });
+type FormResult = Omit<FormState, "token">;
+const failure = (message: string): FormResult => ({ status: "error", message });
 
 export function newFormToken(formId: string): string {
   return issueFormToken(formId, config.apiKey());
@@ -67,6 +68,7 @@ async function notifyOwner(fields: readonly FormField[], values: Record<string, 
       cache: "no-store",
       signal: AbortSignal.timeout(9000),
     });
+    if (response.status === 429) return "capped";
     return response.ok ? "sent" : "failed";
   } catch {
     return "failed";
@@ -74,11 +76,19 @@ async function notifyOwner(fields: readonly FormField[], values: Record<string, 
 }
 
 export async function submitForm(formId: string, fields: readonly FormField[], data: FormData): Promise<FormState> {
+  const key = config.apiKey();
+  const value = data.get("_rp_token");
+  const token = typeof value === "string" && verifyFormToken(value, formId, key) ? value : null;
+  const result = await saveSubmission(formId, fields, data, token);
+  // A retry receives a new nonce, while a valid form keeps the time the visitor
+  // has already spent filling it in. The next message starts a new timer.
+  const started = result.status === "error" && token ? Number(token.split(".")[0]) : undefined;
+  return { ...result, token: issueFormToken(formId, key, started) };
+}
+
+async function saveSubmission(formId: string, fields: readonly FormField[], data: FormData, token: string | null): Promise<FormResult> {
   if (!await allowed("form")) return failure(slowDown);
-  const token = data.get("_rp_token");
-  if (typeof token !== "string" || !verifyFormToken(token, formId, config.apiKey())) {
-    return { ...failure("Please wait a moment before sending again."), token: newFormToken(formId) };
-  }
+  if (!token) return failure("Please wait a moment before sending again.");
   if (looksLikeSpam(data.get("_rp_extra"), [])) return failure(retry);
 
   const { errors, values } = validateFields(fields, data);
@@ -89,6 +99,7 @@ export async function submitForm(formId: string, fields: readonly FormField[], d
   const payload = JSON.stringify(values);
   if (Buffer.byteLength(payload) > 12000) return failure("Please shorten your message and try again.");
   if (looksLikeSpam(null, Object.values(values))) return failure(retry);
+  if (linkLimitExceeded(Object.values(values))) return failure("Use at most three links, then try again.");
   const email = fields.find((field) => field.type === "email" && values[field.name]);
   if (email && !take(`form:email:${values[email.name]}`, 4, 60 * 60 * 1000)) return failure(slowDown);
   if (!await turnstilePassed(data)) return failure("Please complete the verification and try again.");
@@ -101,7 +112,12 @@ export async function submitForm(formId: string, fields: readonly FormField[], d
   } catch (error) {
     // A retry with the same signed token can only create one row and one email.
     if (error instanceof AppwriteException && error.code === 409 && error.type === "row_already_exists") {
-      return { status: "success", message: success, token: newFormToken(formId) };
+      try {
+        const existing = await tables.getRow<Models.Row & { formId: string; payload: string }>(ids);
+        if (existing.formId === formId && existing.payload === payload) return { status: "success", message: success };
+      } catch {
+        console.warn("Runport form retry could not be checked");
+      }
     }
     console.warn("Runport form storage failed", error instanceof AppwriteException ? error.type : undefined);
     return failure(retry);
@@ -114,5 +130,5 @@ export async function submitForm(formId: string, fields: readonly FormField[], d
     // The row was already saved. A failure here cannot turn it into a failed submission.
     console.warn("Runport form notification status could not be recorded");
   }
-  return { status: "success", message: success, token: newFormToken(formId) };
+  return { status: "success", message: success };
 }

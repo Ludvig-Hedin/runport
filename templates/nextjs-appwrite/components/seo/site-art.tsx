@@ -1,4 +1,6 @@
 import { ImageResponse } from "next/og";
+import { readFile } from "node:fs/promises";
+import { join } from "node:path";
 import { appearance, appName } from "@/runport.config";
 import type { Themed } from "@/components/auth/appearance";
 
@@ -26,8 +28,9 @@ export function appIcon(size: number) {
   return new ImageResponse(<Mark size={size} />, { width: size, height: size });
 }
 
-export function shareImage() {
+export async function shareImage() {
   const name = appName.trim();
+  const inter = await readFile(join(process.cwd(), "assets", "inter-latin-600-normal.woff"));
   return new ImageResponse(
     <div style={{
       display: "flex", flexDirection: "column", alignItems: "flex-start", justifyContent: "center",
@@ -36,12 +39,12 @@ export function shareImage() {
     }}>
       <Mark size={96} />
       <div style={{
-        display: "flex", fontSize: name.length > 27 ? 66 : 100, fontWeight: 700,
+        display: "flex", fontSize: name.length > 27 ? 66 : 100, fontFamily: "Inter", fontWeight: 600,
         lineHeight: 1.1, letterSpacing: "-0.035em", overflowWrap: "break-word", maxWidth: "100%",
       }}>
         {name}
       </div>
     </div>,
-    { width: 1200, height: 630 },
+    { width: 1200, height: 630, fonts: [{ name: "Inter", data: inter, weight: 600 }] },
   );
 }

@@ -20,7 +20,7 @@ smtp.on("error", (error) => jsonLog({ result: "smtp-error", reason: error.messag
 smtp.listen(config.smtpPort, () => jsonLog({ result: "listening", smtpPort: config.smtpPort, delivery: config.delivery, caps: config.caps }));
 
 // Only the authenticated form endpoint is forwarded by the public router.
-const sendFormMail = formMailHandler(config);
+const sendFormMail = formMailHandler(config, limits, deliver);
 Bun.serve({
   port: config.httpPort,
   maxRequestBodySize: 32 * 1024,

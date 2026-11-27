@@ -1,11 +1,15 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
 import nodemailer from "nodemailer";
+import { deliverWithinBudget, jsonLog, MailBudgetExceeded, type MailLog } from "./budgeted-delivery";
 import type { Config } from "./config";
-import { APP_ID, SYSTEM_SENDER, appPassword, senderProblem } from "./identity";
+import type { Deliver } from "./deliver";
+import { APP_ID, SYSTEM_SENDER, senderProblem } from "./identity";
+import type { Limits } from "./limits";
 
 const address = /^[a-z\d.!#$%&'*+/=?^_`{|}~-]+@[a-z\d-]+(?:\.[a-z\d-]+)+$/i;
 
-export function formMailHandler(config: Config) {
+export function formMailHandler(config: Config, limits: Pick<Limits, "reserve" | "release">, deliver: Deliver, log: MailLog = jsonLog) {
+  const composer = nodemailer.createTransport({ streamTransport: true, buffer: true, newline: "windows" });
   return async (request: Request): Promise<Response> => {
     if (request.method !== "POST") return new Response(null, { status: 405, headers: { Allow: "POST" } });
     const app = request.headers.get("x-runport-app") ?? "";
@@ -26,28 +30,19 @@ export function formMailHandler(config: Config) {
       return new Response(null, { status: 400 });
     }
 
-    const smtp = nodemailer.createTransport({
-      host: "127.0.0.1",
-      port: config.smtpPort,
-      secure: false,
-      ignoreTLS: true,
-      auth: { user: app, pass: appPassword(config.masterKey, app) },
-      connectionTimeout: 2000,
-      greetingTimeout: 2000,
-      socketTimeout: 7000,
-    });
     try {
-      await smtp.sendMail({
-        envelope: { from: body.from, to: [body.to] },
+      const { message } = await composer.sendMail({
         from: body.from,
         to: body.to,
         subject: body.subject,
         text: body.text,
       });
-      return new Response(null, { status: 204 });
+      if (!Buffer.isBuffer(message)) return new Response(null, { status: 502 });
+      if (message.length > config.maxBytes) return new Response(null, { status: 413 });
+      const delivered = await deliverWithinBudget(limits, deliver, log, app, "form", { from: body.from, to: [body.to] }, message);
+      return new Response(null, { status: delivered === 1 ? 204 : 502 });
     } catch (error) {
-      const code = (error as { responseCode?: number }).responseCode;
-      return new Response(null, { status: code === 550 ? 429 : 502 });
+      return new Response(null, { status: error instanceof MailBudgetExceeded ? 429 : 502 });
     }
   };
 }

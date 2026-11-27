@@ -6,13 +6,15 @@
     resize: vertical;
   }
 
-  .rp-public-field-error {
-    color: var(--rp-danger);
+  .rp-public-form-pending {
+    color: var(--rp-muted);
+    padding: 12px 14px;
     font-size: 14px;
   }
 
   .rp-public-form-status:has(.rp-alert),
-  .rp-public-form-status:has(.rp-notice) {
+  .rp-public-form-status:has(.rp-notice),
+  .rp-public-form-status:has(.rp-public-form-pending) {
     display: block;
   }
 

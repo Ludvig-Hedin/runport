@@ -11,7 +11,7 @@ export type FormState = {
   status: "idle" | "error" | "success";
   message?: string;
   errors?: Record<string, string>;
-  token?: string;
+  token: string;
 };
 
 export const contactFields = [
@@ -48,6 +48,9 @@ export function validateFields(fields: readonly FormField[], data: FormData) {
 
 export function looksLikeSpam(honeypot: FormDataEntryValue | null, values: readonly string[]): boolean {
   const text = values.join("\n");
-  const links = text.match(/(?:https?:\/\/|www\.)[^\s]+/gi) ?? [];
-  return Boolean(honeypot) || links.length > 3 || /(\S)\1{23}/u.test(text) || /<\/?(?:script|iframe)\b/i.test(text);
+  return Boolean(honeypot) || /([\p{L}\p{N}])\1{23}/u.test(text) || /<\/?(?:script|iframe)\b/i.test(text);
+}
+
+export function linkLimitExceeded(values: readonly string[]): boolean {
+  return (values.join("\n").match(/(?:https?:\/\/|www\.)[^\s]+/gi)?.length ?? 0) > 3;
 }

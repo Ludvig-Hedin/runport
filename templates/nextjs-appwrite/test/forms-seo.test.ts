@@ -1,8 +1,9 @@
 import { describe, expect, test } from "bun:test";
-import { contactFields, validateFields, looksLikeSpam } from "../lib/form-fields";
+import { contactFields, validateFields, looksLikeSpam, linkLimitExceeded } from "../lib/form-fields";
 import { issueFormToken, verifyFormToken } from "../lib/form-token";
 import { publicPagePath, sitemapEntries, siteOrigin } from "../lib/seo-paths";
 import { indexingAllowed } from "../lib/config";
+import { formIpBucket } from "../lib/form-ip";
 
 describe("form validation", () => {
   test("accepts a normal message with a link and normalizes the email", () => {
@@ -26,9 +27,8 @@ describe("form validation", () => {
     expect(values.recipient).toBeUndefined();
   });
 
-  test("recognizes a filled honeypot, link floods and repeated characters", () => {
+  test("recognizes a filled honeypot and repeated characters", () => {
     expect(looksLikeSpam("filled", ["Hello"])).toBe(true);
-    expect(looksLikeSpam("", ["https://a.com https://b.com https://c.com https://d.com"])).toBe(true);
     expect(looksLikeSpam("", ["xxxxxxxxxxxxxxxxxxxxxxxxx"])).toBe(true);
   });
 
@@ -75,4 +75,15 @@ describe("public URLs", () => {
     expect(indexingAllowed({ ALLOW_INDEXING: "1", VERCEL_ENV: "preview" })).toBe(false);
     expect(indexingAllowed({ ALLOW_INDEXING: "1", SITE_PASSWORD: "test" })).toBe(false);
   });
+});
+
+test("rate limits IPv6 visitors by /64 and preserves mapped IPv4 identity", () => {
+  expect(formIpBucket("2001:db8:1:2::1")).toBe(formIpBucket("2001:0db8:0001:0002:aaaa:0:0:2"));
+  expect(formIpBucket("2001:db8:1:2::1")).not.toBe(formIpBucket("2001:db8:1:3::1"));
+  expect(formIpBucket("::ffff:192.0.2.10")).toBe(formIpBucket("192.0.2.10"));
+});
+
+test("allows text dividers and gives a specific error for link-heavy messages", () => {
+  expect(looksLikeSpam("", ["Before\n------------------------\nAfter"])).toBe(false);
+  expect(linkLimitExceeded(["https://a.com https://b.com https://c.com https://d.com"])).toBe(true);
 });

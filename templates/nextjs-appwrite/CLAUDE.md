@@ -90,9 +90,11 @@ fields. A saved submission clears them.
 
 Setup creates the server-only `main/form_submissions` table. Each row stores the
 form ID, JSON payload and notification status. A saved message is acknowledged
-even if the gateway is unavailable or capped. Check its notification status
-(`sent`, `failed`, `unconfigured`, or `pending` after an interrupted request)
-in Appwrite. Submitting the same signed form twice creates one row and one email.
+even if the gateway is unavailable or reaches its separate form mail budget.
+In Appwrite, filter the table by `notification = capped` to find messages saved
+after that budget was exhausted. Other statuses are `sent`, `failed`,
+`unconfigured`, and `pending` after an interrupted request. Replaying the
+same signed submission creates one row and one email.
 
 Runport provisions `RUNPORT_FORM_OWNER_EMAIL`, `RUNPORT_FORM_MAIL_URL`,
 `RUNPORT_FORM_MAIL_APP`, `RUNPORT_FORM_MAIL_FROM` and a recipient-bound
@@ -102,7 +104,8 @@ deploying the app to select the owner inbox. If the app already has a different
 issues a matching token. Visitor addresses are saved as fields only.
 
 The built-in spam checks use a hidden field, a signed timer, simple content
-checks and per-IP and per-email limits for one server process. For optional
+checks and per-IP and per-email limits for one server process. IPv6 addresses
+share one rate limit per /64. For optional
 Cloudflare Turnstile, set both `TURNSTILE_SITE_KEY` and `TURNSTILE_SECRET_KEY`.
 Its script loads only on pages with a form when a site key is set.
 
@@ -112,8 +115,10 @@ Its script loads only on pages with a form when a site key is set.
    `runport.config.ts`. Set `ALLOW_INDEXING=1` when the public production site
    is ready. Preview deployments and locked sites stay out of search.
 2. Put public pages in `app/(public)`. Routes keep the same URL. Static
-   pages in that group are added to `/sitemap.xml` on the next build.
-3. Set the metadata from each public page. The title gets the app name as a
+   pages in that group appear in `/sitemap.xml` on the next build and inherit
+   the site's indexing switch.
+3. Set page-specific metadata when you want its own canonical URL, title or
+   description. The title gets the app name as a
    suffix and the description falls back to `seo.description`.
 
    ```tsx
