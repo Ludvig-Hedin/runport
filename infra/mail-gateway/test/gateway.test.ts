@@ -1,5 +1,9 @@
 import { afterAll, beforeEach, describe, expect, test } from "bun:test";
+import { Database } from "bun:sqlite";
 import { createHmac } from "node:crypto";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import nodemailer, { type SendMailOptions } from "nodemailer";
 import type { Config } from "../src/config";
 import { DeliveryError, cloudflareDelivery, type Envelope } from "../src/deliver";
@@ -372,4 +376,30 @@ test("form daily caps are independent across apps and bound globally", () => {
   expect(limits.reserve("third", "form", 2).ok).toBe(true);
   expect(limits.reserve("fourth", "form", 1).ok).toBe(false);
   expect(limits.reserve("first", "mail", 20).ok).toBe(true);
+});
+
+test("login and alert deliveries do not consume the newsletter and form budget", () => {
+  const folder = mkdtempSync(join(tmpdir(), "runport-mail-kinds-"));
+  try {
+    const path = join(folder, "limits.sqlite");
+    const limits = new Limits(path, caps(100, 30, 100, 0.7));
+    const now = new Date("2026-11-27T10:15:00Z");
+    expect(limits.reserve("newsletter", "news", 69, now).ok).toBe(true);
+
+    // Simulate the separate login and alert kinds on the same gateway database.
+    const db = new Database(path);
+    try {
+      const seed = db.query("INSERT INTO sent_by_kind (day, app, kind, recipients) VALUES (?, ?, ?, ?)");
+      seed.run(stockholmDay(now), "app", "login", 6);
+      seed.run(stockholmDay(now), "app", "alert", 6);
+    } finally {
+      db.close();
+    }
+
+    expect(limits.reserve("app", "form", 1, now).ok).toBe(true);
+    expect(limits.reserve("app", "form", 1, now).ok).toBe(false);
+    expect(limits.today(now).total).toBe(82);
+  } finally {
+    rmSync(folder, { recursive: true, force: true });
+  }
 });

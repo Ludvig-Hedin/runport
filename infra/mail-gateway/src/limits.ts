@@ -58,8 +58,8 @@ export class Limits {
           reason: kind === "news" ? `newsletters may use at most ${totalCap} of today's ${this.caps.total} emails` : `daily limit of ${totalCap} emails for all apps reached`,
         };
       }
-      if (kind !== "mail") {
-        const automation = this.db.query("SELECT COALESCE(SUM(recipients), 0) AS n FROM sent_by_kind WHERE day = ? AND kind != 'mail'").get(day) as { n: number };
+      if (kind === "news" || kind === "form") {
+        const automation = this.db.query("SELECT COALESCE(SUM(recipients), 0) AS n FROM sent_by_kind WHERE day = ? AND kind IN ('news', 'form')").get(day) as { n: number };
         const automationCap = Math.floor(this.caps.total * Math.min(this.caps.newsShare, 0.7));
         if (automation.n + recipients > automationCap) {
           return { ok: false, reason: "daily automation budget reached; capacity reserved for account mail" };
