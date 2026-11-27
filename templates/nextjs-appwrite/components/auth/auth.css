@@ -151,7 +151,7 @@
     font-weight: 500;
     cursor: pointer;
   }
-  .rp-reveal:focus-visible { outline: 2px solid var(--rp-text); outline-offset: -2px; }
+  .rp-reveal:focus-visible { outline: 2px solid var(--rp-text, currentColor); outline-offset: -2px; }
 
   .rp-primaryButton,
   .rp-secondaryButton,
@@ -197,7 +197,7 @@
   .rp-socialButton:disabled { cursor: default; opacity: 0.5; }
   .rp-primaryButton:focus-visible,
   .rp-secondaryButton:focus-visible,
-  .rp-socialButton:focus-visible { outline: 2px solid var(--rp-text); outline-offset: 2px; }
+  .rp-socialButton:focus-visible { outline: 2px solid var(--rp-text, currentColor); outline-offset: 2px; }
   .rp-socialButton svg { width: 18px; height: 18px; flex-shrink: 0; }
 
   .rp-spinner {
@@ -236,7 +236,7 @@
   }
   @media (hover: hover) { .rp-link:hover { text-decoration-color: currentColor; } }
   .rp-link:disabled { cursor: default; opacity: 0.5; }
-  .rp-link:focus-visible { outline: 2px solid var(--rp-text); outline-offset: 2px; border-radius: 4px; }
+  .rp-link:focus-visible { outline: 2px solid var(--rp-text, currentColor); outline-offset: 2px; border-radius: 4px; }
 
   .rp-alert,
   .rp-notice {
@@ -306,7 +306,7 @@
     background: none;
     cursor: pointer;
   }
-  .rp-userButton-trigger:focus-visible { outline: 2px solid var(--rp-text); outline-offset: 2px; }
+  .rp-userButton-trigger:focus-visible { outline: 2px solid var(--rp-text, currentColor); outline-offset: 2px; }
   .rp-userButtonAvatar {
     display: grid;
     width: 36px;
@@ -359,7 +359,7 @@
   }
   .rp-userButtonMenuItem:first-of-type { border-radius: 0 0 10px 10px; }
   @media (hover: hover) { .rp-userButtonMenuItem:hover:not(:disabled) { background: var(--rp-input-bg); } }
-  .rp-userButtonMenuItem:focus-visible { outline: 2px solid var(--rp-text); outline-offset: -2px; }
+  .rp-userButtonMenuItem:focus-visible { outline: 2px solid var(--rp-text, currentColor); outline-offset: -2px; }
   .rp-userButtonMenuItem:disabled { cursor: default; opacity: 0.5; }
   .rp-userButtonMenuItem svg { width: 18px; height: 18px; color: var(--rp-muted); }
 }

@@ -12,7 +12,7 @@ const PLAIN: Record<string, string> = {
   user_email_already_exists: "That email already has an account. Sign in instead.",
   user_not_found: "This link has expired or is not valid. Ask for a new one.",
   user_invalid_token: "This link has expired or was already used. Ask for a new one.",
-  user_password_recently_used: "Choose a password you haven't used before.",
+  password_recently_used: "Choose a password you haven't used before.",
   password_personal_data: "Choose a password that doesn't contain your name or email.",
   user_blocked: "This account is blocked. Contact the site owner.",
   user_password_reset_required: "You need to choose a new password. Use \"Forgot password?\" to get a link.",
