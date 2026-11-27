@@ -59,9 +59,11 @@ mail to the separate login credential. Per app, the gateway allows 120
 reports per minute each for server and browser errors. It accepts up to five
 new server fingerprints per Stockholm day and counts repeats for 30 days.
 Browser reports require a signed page grant and are limited per visitor and
-app before forwarding. They feed one digest for the previous Stockholm day.
-The gateway retries confirmed temporary refusals with backoff and avoids
-resending when delivery is uncertain.
+app before forwarding. The gateway accepts up to 300 browser reports per
+minute across all apps and sends one digest for the previous Stockholm day.
+It retries confirmed temporary refusals with backoff and avoids resending
+when delivery is uncertain. Queued alerts stay with their original Railway
+registration when a slug is reused.
 
 The five-minute job rotates through up to 20 apps per run. It checks Railway
 deployment and instance state and probes each running app's public URL.
@@ -69,8 +71,19 @@ A confirmed sleeper stays asleep unless an open incident needs a verified
 recovery. The probe allows a second attempt after a cold start. Outages
 can send one notice and its recovery per one-hour incident window. Deleting
 an app from the registry or confirming the service is gone in Railway retires
-its alerts. API errors preserve the last known state. A Railway rate limit
-pauses checks for the retry delay.
+its alerts. Railway can return the same error for missing and inaccessible
+services, so the monitor confirms absence from the authorized environment's
+service listing. API errors preserve the last known state. A Railway rate
+limit pauses checks for the retry delay.
+
+The schema contract test takes Railway's published schema file.
+
+```sh
+(cd infra/railway/ops && bun install --frozen-lockfile)
+mkdir -p output/app-alerts-schema
+curl -fsSL https://raw.githubusercontent.com/railwayapp/cli/1e9b3663192e097a499471f932e0dcd29e8b2e07/src/gql/schema.json -o output/app-alerts-schema/railway-schema.json
+RAILWAY_CLI_SCHEMA="$PWD/output/app-alerts-schema/railway-schema.json" bun test infra/railway/ops/test/app-alert-schema.test.ts
+```
 
 **Rollout prerequisite.** Land the other shared Railway changes first.
 Wire `checkDeployedApps()` from `ops/app-alert-monitor.ts` into the existing

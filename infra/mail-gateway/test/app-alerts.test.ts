@@ -48,6 +48,36 @@ function fixture({ total = 100, alertPerApp = 10, recipient = owner } = {}) {
     tick: (time: number) => { now += time; }, fail: (error?: Error) => { failure = error; } };
 }
 
+test("the shared browser intake cap covers all registered apps without consuming server capacity", async () => {
+  const f = fixture();
+  const candidate = { ...error, source: "browser" };
+  for (const app of [slug, "second-app", "third-app"]) await f.register(app);
+  for (const app of [slug, "second-app"]) {
+    for (let i = 0; i < 120; i++) expect((await f.report(candidate, app)).status).toBe(204);
+  }
+  for (let i = 0; i < 60; i++) expect((await f.report(candidate, "third-app")).status).toBe(204);
+  expect((await f.report(candidate, "third-app")).status).toBe(429);
+  expect((await f.report(error, "third-app")).status).toBe(204);
+  f.tick(60_000);
+  expect((await f.report(candidate, "third-app")).status).toBe(204);
+});
+
+test("queued events stay scoped to their original deployment when a slug is reused", async () => {
+  const f = fixture();
+  await f.register();
+  await f.report();
+  const newService = "00000000-0000-0000-0000-000000000099";
+  await f.request("/_runport/alerts/register/" + slug, registrationKey(master), { ...deployment, serviceId: newService });
+  await f.poll();
+  expect(f.inbox).toHaveLength(0);
+  const token = reportKey(master, slug, newService, deployment.environmentId);
+  expect((await f.request("/_runport/alerts/report/" + slug, token, error)).status).toBe(204);
+  await f.poll();
+  expect(f.inbox).toHaveLength(1);
+  expect(f.inbox[0].raw).toContain(newService);
+  expect(f.inbox[0].raw).toContain("Antal: 1");
+});
+
 test("server fingerprints are keyed, deduplicated, counted and emailed only to the configured owner", async () => {
   const f = fixture();
   expect((await f.report()).status).toBe(404);

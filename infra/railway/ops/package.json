@@ -4,6 +4,7 @@
   "type": "module",
   "devDependencies": {
     "@types/bun": "^1.4.4",
+    "graphql": "16.11.0",
     "typescript": "^7.0.2"
   }
 }

@@ -2,12 +2,28 @@ import { afterAll, beforeEach, describe, expect, test } from "bun:test";
 import { createHmac } from "node:crypto";
 import nodemailer, { type SendMailOptions } from "nodemailer";
 import type { Config } from "../src/config";
-import { DeliveryError, cloudflareDelivery, type Envelope } from "../src/deliver";
+import { DeliveryError, cloudflareDelivery, sesDelivery, type Envelope } from "../src/deliver";
 import { appPassword, headerFrom, loginPassword } from "../src/identity";
 import { Limits, stockholmDay } from "../src/limits";
 import { createSmtpServer } from "../src/server";
 
 const caps = (total: number, perApp: number, perAppNews = 100, newsShare = 1) => ({ total, perApp, perAppNews, newsShare });
+
+test("SES maps confirmed throttling and permanent refusals, keeping server errors ambiguous", async () => {
+  const envelope = { from: "alerts@example.test", to: ["owner@example.test"] };
+  for (const [name, code, retry, definite] of [
+    ["TooManyRequestsException", 429, true, true],
+    ["ThrottlingException", 400, true, true],
+    ["MessageRejected", 400, false, true],
+    ["ServiceUnavailable", 503, true, false],
+    ["RequestTimeoutException", 408, true, false],
+  ] as const) {
+    const deliver = sesDelivery("test-region", {
+      send: async () => { throw Object.assign(new Error("a request containing short-lived provider details"), { name, $metadata: { httpStatusCode: code } }); },
+    });
+    await expect(deliver(envelope, Buffer.from("mail"))).rejects.toMatchObject({ retry, definite });
+  }
+});
 
 describe("Limits", () => {
   test("alert caps and login headroom are reserved in the shared quota", () => {

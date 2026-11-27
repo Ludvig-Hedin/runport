@@ -26,6 +26,7 @@ const downReasons: Record<string, string> = {
 };
 const hour = 60 * 60_000;
 const dayMs = 24 * hour;
+const browserIntakePerMinute = 300;
 const key = (master: string, purpose: string) => createHmac("sha256", master).update(`runport-app-alerts:${purpose}`).digest("hex");
 export const reportKey = (master: string, slug: string, serviceId: string, environmentId: string) =>
   key(master, `report:${slug}:${serviceId}:${environmentId}`);
@@ -33,11 +34,11 @@ export const registrationKey = (master: string) => key(master, "register");
 export const monitorKey = (master: string) => key(master, "monitor");
 
 type Registration = { slug: string; projectId: string; environmentId: string; serviceId: string; domain: string };
-type Deployment = Registration & { incident: number | null; lastIncident: number | null };
+type Deployment = Registration & { registrationId: string; incident: number | null; lastIncident: number | null };
 type Report = { source: string; kind: string; fingerprint: string };
 type Observation = { slug: string; serviceId: string; environmentId: string; status: string; reason: string };
 type Alert = {
-  id: string; slug: string; detail: string; happened: number; count: number; failures: number;
+  id: string; registrationId: string; slug: string; detail: string; happened: number; count: number; failures: number;
   category: "error" | "digest" | "down" | "up";
 };
 type Options = {
@@ -112,15 +113,14 @@ export function createAppAlerts({ path, master, owner, limits, deliver, log, clo
   db.run(`
     CREATE TABLE IF NOT EXISTS apps (
       slug TEXT PRIMARY KEY, projectId TEXT NOT NULL, environmentId TEXT NOT NULL, serviceId TEXT NOT NULL,
-      domain TEXT NOT NULL, incident INTEGER, lastIncident INTEGER
+      domain TEXT NOT NULL, incident INTEGER, lastIncident INTEGER, registrationId TEXT NOT NULL
     );
     CREATE TABLE IF NOT EXISTS alerts (
       id TEXT PRIMARY KEY, slug TEXT NOT NULL, category TEXT NOT NULL, detail TEXT NOT NULL,
       happened INTEGER NOT NULL, count INTEGER NOT NULL DEFAULT 1, state TEXT NOT NULL DEFAULT 'pending',
       day TEXT NOT NULL, channel TEXT NOT NULL DEFAULT '', due INTEGER NOT NULL DEFAULT 0,
-      failures INTEGER NOT NULL DEFAULT 0, parent TEXT
+      failures INTEGER NOT NULL DEFAULT 0, parent TEXT, registrationId TEXT NOT NULL
     );
-    CREATE INDEX IF NOT EXISTS alerts_budget ON alerts(slug, channel, day);
     CREATE INDEX IF NOT EXISTS alerts_pending ON alerts(state, happened);
     CREATE TABLE IF NOT EXISTS traffic (
       slug TEXT NOT NULL, channel TEXT NOT NULL, minute INTEGER NOT NULL, count INTEGER NOT NULL,
@@ -136,7 +136,14 @@ export function createAppAlerts({ path, master, owner, limits, deliver, log, clo
     const names = (table: "alerts" | "apps") => new Set(
       db.query<{ name: string }, []>(`PRAGMA table_info(${table})`).all().map((entry) => entry.name),
     );
-    if (!names("apps").has("lastIncident")) db.run("ALTER TABLE apps ADD COLUMN lastIncident INTEGER");
+    const appColumns = names("apps");
+    if (!appColumns.has("lastIncident")) db.run("ALTER TABLE apps ADD COLUMN lastIncident INTEGER");
+    if (!appColumns.has("registrationId")) {
+      db.run("ALTER TABLE apps ADD COLUMN registrationId TEXT NOT NULL DEFAULT ''");
+      for (const { slug } of db.query<{ slug: string }, []>("SELECT slug FROM apps").all()) {
+        db.query("UPDATE apps SET registrationId = ? WHERE slug = ?").run(crypto.randomUUID(), slug);
+      }
+    }
     const columns = names("alerts");
     if (!columns.has("due")) {
       db.run("ALTER TABLE alerts ADD COLUMN due INTEGER NOT NULL DEFAULT 0");
@@ -147,52 +154,64 @@ export function createAppAlerts({ path, master, owner, limits, deliver, log, clo
     }
     if (!columns.has("failures")) db.run("ALTER TABLE alerts ADD COLUMN failures INTEGER NOT NULL DEFAULT 0");
     if (!columns.has("parent")) db.run("ALTER TABLE alerts ADD COLUMN parent TEXT");
+    if (!columns.has("registrationId")) {
+      db.run("ALTER TABLE alerts ADD COLUMN registrationId TEXT NOT NULL DEFAULT ''");
+      // Legacy records did not identify the deployment. Preserve the data,
+      // but do not send a queued message on behalf of an unverified service.
+      db.run("UPDATE alerts SET state = 'archived' WHERE state = 'pending'");
+    }
+    db.run("CREATE UNIQUE INDEX IF NOT EXISTS apps_registration ON apps(registrationId)");
+    db.run("CREATE INDEX IF NOT EXISTS alerts_registration ON alerts(registrationId, channel, day)");
     db.run("CREATE INDEX IF NOT EXISTS alerts_due ON alerts(state, due)");
   })();
 
-  const report = db.transaction((app: Registration, event: Report, now: number): number => {
-    const { slug, serviceId, environmentId } = app;
-    if (!db.query("SELECT 1 FROM apps WHERE slug = ? AND serviceId = ? AND environmentId = ?")
-      .get(slug, serviceId, environmentId)) return 404;
+  const intake = db.query<{ count: number }, [string, string, number, number]>(`
+    INSERT INTO traffic VALUES (?, ?, ?, 1)
+    ON CONFLICT (slug, channel) DO UPDATE SET minute = excluded.minute,
+    count = CASE WHEN minute = excluded.minute THEN MIN(count + 1, ?) ELSE 1 END
+    RETURNING count
+  `);
+  const scopedId = (app: Deployment, purpose: string) => `${app.registrationId}:${key(master, purpose)}`;
+  const report = db.transaction((app: Deployment, event: Report, now: number): number => {
+    const { slug, registrationId } = app;
+    if (!db.query("SELECT 1 FROM apps WHERE registrationId = ?").get(registrationId)) return 404;
     const channel = event.source === "browser" ? "browser" : "server";
     const window = Math.floor(now / 60_000);
-    const rate = db.query<{ count: number }, [string, string, number]>(`
-      INSERT INTO traffic VALUES (?, ?, ?, 1)
-      ON CONFLICT (slug, channel) DO UPDATE SET minute = excluded.minute,
-      count = CASE WHEN minute = excluded.minute THEN MIN(count + 1, 121) ELSE 1 END
-      RETURNING count
-    `).get(slug, channel, window);
-    if (!rate || rate.count > 120) return 429;
+    if (intake.get(slug, channel, window, 121)!.count > 120) return 429;
+    // An empty slug cannot be registered. It holds the shared browser budget
+    // on the same SQLite volume as the per-app counters.
+    if (channel === "browser" &&
+      intake.get("", channel, window, browserIntakePerMinute + 1)!.count > browserIntakePerMinute) return 429;
 
     const day = stockholmDay(new Date(now));
     if (channel === "browser") {
       // Anonymous reports have a daily summary. Neither the submitted
       // fingerprint nor an individual anonymous event occupies the queue.
-      const id = key(master, `browser-digest:${slug}:${day}`);
+      const id = scopedId(app, `browser-digest:${slug}:${day}`);
       db.query(`
-        INSERT INTO alerts (id, slug, category, detail, happened, day, channel)
-        VALUES (?, ?, 'digest', 'Fel i webbläsaren som rapporterats under dagen.', ?, ?, 'browser')
+        INSERT INTO alerts (id, registrationId, slug, category, detail, happened, day, channel)
+        VALUES (?, ?, ?, 'digest', 'Fel i webbläsaren som rapporterats under dagen.', ?, ?, 'browser')
         ON CONFLICT (id) DO UPDATE SET count = count + 1
-      `).run(id, slug, now, day);
+      `).run(id, registrationId, slug, now, day);
       return 204;
     }
-    const id = key(master, `fingerprint:${slug}:${event.source}:${event.kind}:${event.fingerprint}`);
+    const id = scopedId(app, `fingerprint:${slug}:${event.source}:${event.kind}:${event.fingerprint}`);
     const existing = db.query("UPDATE alerts SET count = count + 1 WHERE id = ?").run(id);
     if (existing.changes) return 204;
 
     const budget = db.query<{ count: number }, [string, string, string]>(
-      "SELECT COUNT(*) AS count FROM alerts WHERE slug = ? AND channel = ? AND day = ?",
-    ).get(slug, channel, day);
+      "SELECT COUNT(*) AS count FROM alerts WHERE registrationId = ? AND channel = ? AND day = ?",
+    ).get(registrationId, channel, day);
     if (!budget || budget.count >= 5) return 429;
-    db.query("INSERT INTO alerts (id, slug, category, detail, happened, day, channel) VALUES (?, ?, 'error', ?, ?, ?, ?)")
-      .run(id, slug, `${sources[event.source]} (${event.kind}).`, now, day, channel);
+    db.query("INSERT INTO alerts (id, registrationId, slug, category, detail, happened, day, channel) VALUES (?, ?, ?, 'error', ?, ?, ?, ?)")
+      .run(id, registrationId, slug, `${sources[event.source]} (${event.kind}).`, now, day, channel);
     return 204;
   });
 
-  const retire = db.transaction((slug: string) => {
-    db.query("DELETE FROM alerts WHERE slug = ?").run(slug);
-    db.query("DELETE FROM traffic WHERE slug = ?").run(slug);
-    db.query("DELETE FROM apps WHERE slug = ?").run(slug);
+  const retire = db.transaction((app: Deployment) => {
+    db.query("DELETE FROM alerts WHERE registrationId = ?").run(app.registrationId);
+    db.query("DELETE FROM traffic WHERE slug = ?").run(app.slug);
+    db.query("DELETE FROM apps WHERE registrationId = ?").run(app.registrationId);
   });
 
   const observe = db.transaction((observations: Observation[], now: number) => {
@@ -200,31 +219,35 @@ export function createAppAlerts({ path, master, owner, limits, deliver, log, clo
       const app = db.query<Deployment, [string]>("SELECT * FROM apps WHERE slug = ?").get(slug);
       if (!app || app.serviceId !== serviceId || app.environmentId !== environmentId || status === "unknown") continue;
       if (status === "retired") {
-        retire(slug);
+        retire(app);
         continue;
       }
       const day = stockholmDay(new Date(now));
       if (status === "down" && app.incident === null && (app.lastIncident === null || now - app.lastIncident >= hour)) {
-        const id = key(master, `incident:${slug}:${app.serviceId}:${now}`);
+        const id = incidentId(app, now);
         db.query("UPDATE apps SET incident = ?, lastIncident = ? WHERE slug = ?").run(now, now, slug);
-        db.query("INSERT INTO alerts (id, slug, category, detail, happened, day) VALUES (?, ?, 'down', ?, ?, ?)")
-          .run(id, slug, downReasons[reason], now, day);
+        db.query("INSERT INTO alerts (id, registrationId, slug, category, detail, happened, day) VALUES (?, ?, ?, 'down', ?, ?, ?)")
+          .run(id, app.registrationId, slug, downReasons[reason], now, day);
       } else if (status === "up" && app.incident !== null) {
         const minutes = Math.max(1, Math.ceil((now - app.incident) / 60_000));
         db.query("UPDATE apps SET incident = NULL WHERE slug = ?").run(slug);
-        const parent = key(master, `incident:${slug}:${app.serviceId}:${app.incident}`);
-        db.query("INSERT INTO alerts (id, slug, category, detail, happened, day, parent) VALUES (?, ?, 'up', ?, ?, ?, ?)")
-          .run(crypto.randomUUID(), slug, `Appen svarar igen. Avbrottet varade cirka ${minutes} minuter.`, now, day, parent);
+        const parent = incidentId(app, app.incident);
+        db.query("INSERT INTO alerts (id, registrationId, slug, category, detail, happened, day, parent) VALUES (?, ?, ?, 'up', ?, ?, ?, ?)")
+          .run(crypto.randomUUID(), app.registrationId, slug, `Appen svarar igen. Avbrottet varade cirka ${minutes} minuter.`, now, day, parent);
       }
     }
   });
+
+  function incidentId(app: Deployment, startedAt: number): string {
+    return scopedId(app, `incident:${app.slug}:${app.serviceId}:${startedAt}`);
+  }
 
   async function deliverAlert(event: Alert & Registration) {
       const now = new Date(clock());
       const reservation = limits.reserve(event.slug, "alert", 1, now);
       if (!reservation.ok) {
-        db.query("UPDATE alerts SET due = MAX(due, ?) WHERE slug = ? AND state = 'pending'")
-          .run(now.getTime() + hour, event.slug);
+        db.query("UPDATE alerts SET due = MAX(due, ?) WHERE registrationId = ? AND state = 'pending'")
+          .run(now.getTime() + hour, event.registrationId);
         log({ app: event.slug, kind: "app-alert", result: "refused", reason: reservation.reason });
         return;
       }
@@ -251,7 +274,7 @@ export function createAppAlerts({ path, master, owner, limits, deliver, log, clo
         "MIME-Version: 1.0", "Content-Type: text/plain; charset=utf-8", "Content-Transfer-Encoding: 8bit",
         "", `App: ${event.slug}`, title, event.detail,
         `Tid: ${stamp} (Stockholm)`, `Antal: ${event.count}`, `Loggar: ${logs}`,
-        ...(event.category === "error" ? [`Fel-ID: ${event.id}`] : []), "",
+        ...(event.category === "error" ? [`Fel-ID: ${event.id.split(":").at(-1)}`] : []), "",
       ].join("\r\n"));
       try {
         const delivered = await deliver({ from: SENDER, to: [recipient] }, raw);
@@ -282,9 +305,9 @@ export function createAppAlerts({ path, master, owner, limits, deliver, log, clo
     const today = stockholmDay(new Date(now));
     const deadline = Date.now() + 35_000;
     const eligible = db.query<Alert & Registration, [number, string, number]>(`
-      SELECT alerts.id, apps.slug, apps.projectId, apps.environmentId, apps.serviceId, apps.domain,
+      SELECT alerts.id, alerts.registrationId, apps.slug, apps.projectId, apps.environmentId, apps.serviceId, apps.domain,
         alerts.detail, alerts.happened, alerts.count, alerts.category, alerts.failures
-      FROM alerts JOIN apps USING (slug)
+      FROM alerts JOIN apps USING (registrationId)
       WHERE state = 'pending' AND due <= ? AND (category != 'digest' OR day < ?)
         AND (parent IS NULL OR EXISTS (SELECT 1 FROM alerts AS incident WHERE incident.id = alerts.parent AND incident.state = 'sent'))
       ORDER BY CASE category WHEN 'down' THEN 0 WHEN 'up' THEN 0 WHEN 'error' THEN 1 ELSE 2 END,
@@ -296,7 +319,8 @@ export function createAppAlerts({ path, master, owner, limits, deliver, log, clo
       for (const event of pending) {
         if (Date.now() >= deadline) return;
         // An earlier row for a capped app may have deferred this one.
-        if (!db.query("SELECT 1 FROM alerts WHERE id = ? AND due <= ? AND state = 'pending'").get(event.id, now)) continue;
+        if (!db.query("SELECT 1 FROM alerts JOIN apps USING (registrationId) WHERE alerts.id = ? AND due <= ? AND state = 'pending'")
+          .get(event.id, now)) continue;
         await deliverAlert(event);
       }
       checked += pending.length;
@@ -352,22 +376,24 @@ export function createAppAlerts({ path, master, owner, limits, deliver, log, clo
       if (!record(input) || typeof input.serviceId !== "string" || !UUID.test(input.serviceId) ||
         typeof input.environmentId !== "string" || !UUID.test(input.environmentId)) return status(400);
       const existing = db.query<Deployment, [string]>("SELECT * FROM apps WHERE slug = ?").get(slug);
-      if (existing && existing.serviceId === input.serviceId && existing.environmentId === input.environmentId) retire(slug);
+      if (existing && existing.serviceId === input.serviceId && existing.environmentId === input.environmentId) retire(existing);
       return status(204);
     }
     if (action === "register") {
       const app = registration(input, slug);
       if (!app) return status(400);
       db.query(`
-        INSERT INTO apps (slug, projectId, environmentId, serviceId, domain) VALUES (?, ?, ?, ?, ?)
+        INSERT INTO apps (slug, projectId, environmentId, serviceId, domain, registrationId) VALUES (?, ?, ?, ?, ?, ?)
         ON CONFLICT (slug) DO UPDATE SET projectId = excluded.projectId, environmentId = excluded.environmentId,
         serviceId = excluded.serviceId, domain = excluded.domain,
-        incident = CASE WHEN serviceId = excluded.serviceId AND environmentId = excluded.environmentId THEN incident ELSE NULL END,
-        lastIncident = CASE WHEN serviceId = excluded.serviceId AND environmentId = excluded.environmentId THEN lastIncident ELSE NULL END
-      `).run(slug, app.projectId, app.environmentId, app.serviceId, app.domain);
+        incident = CASE WHEN serviceId = excluded.serviceId AND environmentId = excluded.environmentId AND projectId = excluded.projectId THEN incident ELSE NULL END,
+        lastIncident = CASE WHEN serviceId = excluded.serviceId AND environmentId = excluded.environmentId AND projectId = excluded.projectId THEN lastIncident ELSE NULL END,
+        registrationId = CASE WHEN serviceId = excluded.serviceId AND environmentId = excluded.environmentId AND projectId = excluded.projectId
+          THEN registrationId ELSE excluded.registrationId END
+      `).run(slug, app.projectId, app.environmentId, app.serviceId, app.domain, crypto.randomUUID());
       return status(204);
     }
     const event = errorReport(input);
-    return status(event && reportingApp ? report(reportingApp, event, clock()) : 400);
+    return status(event && reportingApp ? report.immediate(reportingApp, event, clock()) : 400);
   };
 }

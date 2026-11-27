@@ -1,9 +1,15 @@
 import { expect, test } from "bun:test";
 import { checkApp, checkDeployedApps } from "../infra/railway/ops/app-alert-monitor";
 
-const app = { slug: "throwaway-app", serviceId: "service", environmentId: "env", domain: "test.up.railway.app", incident: null };
+const app = { slug: "throwaway-app", projectId: "project", serviceId: "service", environmentId: "env", domain: "test.up.railway.app", incident: null };
 const makeDeployment = (status: string, instances: string[] = [], deploymentStopped = false) =>
   ({ status, deploymentStopped, instances: instances.map((status) => ({ status })) });
+
+function inventory(nodes: object[], endCursor: string | null = null) {
+  return Response.json({ data: { environment: { deletedAt: null, serviceInstances: {
+    edges: nodes.map(node => ({ node })), pageInfo: { hasNextPage: endCursor !== null, endCursor },
+  } } } });
+}
 
 const run = (latest: ReturnType<typeof makeDeployment>, active: ReturnType<typeof makeDeployment>[], sleep: boolean,
   http: number[] = [200], incident: number | null = null) => {
@@ -11,9 +17,10 @@ const run = (latest: ReturnType<typeof makeDeployment>, active: ReturnType<typeo
   const mock = async (url: string | URL | Request) => {
     urls.push(String(url));
     if (urls.length > 1) return new Response(null, { status: http.shift() ?? 503 });
-    return Response.json({ data: { serviceInstance: {
-      sleepApplication: sleep, activeDeployments: active, latestDeployment: latest,
-    } } });
+    return inventory([{
+      serviceId: app.serviceId, deletedAt: null, sleepApplication: sleep,
+      activeDeployments: active, latestDeployment: latest,
+    }]);
   };
   return checkApp({ ...app, incident }, "test-token", mock, async () => {}).then((result) => ({ result, urls }));
 };
@@ -43,7 +50,22 @@ test("SUCCESS alone cannot clear a known outage or an exited process", async () 
   expect((await run(makeDeployment("SUCCESS", [], true), [], true)).result).toMatchObject({ status: "down", reason: "removed" });
   expect((await run(makeDeployment("BUILDING"), [], true)).result.status).toBe("unknown");
   expect((await checkApp(app, "test-token", async () => Response.json({ errors: [{ message: "unavailable" }] }))).status).toBe("unknown");
-  expect((await checkApp(app, "test-token", async () => Response.json({ data: { serviceInstance: null } }))).status).toBe("retired");
+});
+
+test("retires only confirmed deletion or absence after paginating the authorized environment", async () => {
+  expect((await checkApp(app, "test-token", async () => inventory([{ serviceId: app.serviceId, deletedAt: "archived" }]))).status).toBe("retired");
+  expect((await checkApp(app, "test-token", async () => Response.json({
+    data: null, errors: [{ message: "Not Authorized", extensions: { code: "INTERNAL_SERVER_ERROR" } }],
+  }))).status).toBe("unknown");
+  const cursors: unknown[] = [];
+  const result = await checkApp(app, "test-token", async (_url, req) => {
+    const { after } = JSON.parse(String(req?.body)).variables;
+    cursors.push(after);
+    return after ? inventory([]) : inventory([{ serviceId: "a-different-service" }], "page-2");
+  });
+  expect(cursors).toEqual([null, "page-2"]);
+  expect(result.status).toBe("retired");
+  expect((await checkApp(app, "test-token", async () => inventory([], "repeated-cursor"))).status).toBe("unknown");
 });
 
 test("a Railway 429 stops the batch and persists Retry-After without marking apps down", async () => {

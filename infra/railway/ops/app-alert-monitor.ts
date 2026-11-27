@@ -1,7 +1,7 @@
-type App = { slug: string; serviceId: string; environmentId: string; domain: string; incident: number | null };
+type App = { slug: string; projectId: string; serviceId: string; environmentId: string; domain: string; incident: number | null };
 type Deployment = { status: string; deploymentStopped: boolean; instances: Array<{ status: string }> };
 type Instance = {
-  deletedAt?: string | null; hasEverDeployed?: boolean; sleepApplication: boolean | null;
+  serviceId: string; deletedAt: string | null; sleepApplication: boolean | null;
   activeDeployments: Deployment[]; latestDeployment: Deployment | null;
 };
 type Observation = Pick<App, "slug" | "serviceId" | "environmentId"> & {
@@ -11,15 +11,26 @@ type Fetch = (url: string | URL | Request, init?: RequestInit) => Promise<Respon
 
 const railwayUrl = "https://backboard.railway.com/graphql/v2";
 const deploymentFields = "status deploymentStopped instances { status }";
-const query = `query($serviceId: String!, $environmentId: String!) {
-  serviceInstance(serviceId: $serviceId, environmentId: $environmentId) {
+const query = `query($projectId: String!, $environmentId: String!, $after: String) {
+  environment(id: $environmentId, projectId: $projectId) {
     deletedAt
-    hasEverDeployed
-    sleepApplication
-    activeDeployments { ${deploymentFields} }
-    latestDeployment { ${deploymentFields} }
+    serviceInstances(first: 50, after: $after) {
+      edges { node {
+        serviceId
+        deletedAt
+        sleepApplication
+        activeDeployments { ${deploymentFields} }
+        latestDeployment { ${deploymentFields} }
+      } }
+      pageInfo { hasNextPage endCursor }
+    }
   }
 }`;
+
+type EnvironmentPage = {
+  deletedAt: string | null;
+  serviceInstances: { edges: Array<{ node: Instance }>; pageInfo: { hasNextPage: boolean; endCursor: string | null } };
+};
 
 class RateLimited extends Error {
   constructor(readonly waitMs: number) { super("Railway rate limit reached"); }
@@ -46,31 +57,46 @@ export async function checkApp(
 ): Promise<Observation> {
   const { slug, serviceId, environmentId } = app;
   const result = (status: Observation["status"], reason = ""): Observation => ({ slug, serviceId, environmentId, status, reason });
-  let instance: Instance | null | undefined;
+  let instance: Instance | undefined;
+  let after: string | null = null;
   try {
-    const response = await request(railwayUrl, {
-      method: "POST",
-      redirect: "error",
-      signal: timeout(6000, deadline),
-      headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
-      body: JSON.stringify({ query, variables: { serviceId: app.serviceId, environmentId: app.environmentId } }),
-    });
-    if (response.status === 429) throw new RateLimited(retryAfter(response.headers.get("Retry-After")));
-    if (!response.ok) return result("unknown");
-    const body = await response.json() as {
-      errors?: Array<{ extensions?: { code?: string } }>;
-      data?: { serviceInstance?: Instance | null };
-    };
-    if (body.errors?.some((error) => /^RATE_LIMIT(?:ED|_EXCEEDED)?$/.test(error.extensions?.code ?? ""))) {
-      throw new RateLimited(retryAfter(response.headers.get("Retry-After")));
+    for (let page = 0; page < 4 && !deadline?.aborted; page++) {
+      const response = await request(railwayUrl, {
+        method: "POST",
+        redirect: "error",
+        signal: timeout(6000, deadline),
+        headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+        body: JSON.stringify({ query, variables: { projectId: app.projectId, environmentId, after } }),
+      });
+      if (response.status === 429) throw new RateLimited(retryAfter(response.headers.get("Retry-After")));
+      if (!response.ok) return result("unknown");
+      const body = await response.json() as {
+        errors?: Array<{ extensions?: { code?: string } }>;
+        data?: { environment?: EnvironmentPage };
+      };
+      if (body.errors?.some((error) => /^RATE_LIMIT(?:ED|_EXCEEDED)?$/.test(error.extensions?.code ?? ""))) {
+        throw new RateLimited(retryAfter(response.headers.get("Retry-After")));
+      }
+      const environment = body.data?.environment;
+      if (body.errors?.length || !environment) return result("unknown");
+      if (environment.deletedAt) return result("retired");
+      const { edges, pageInfo } = environment.serviceInstances;
+      instance = edges.find(({ node }) => node.serviceId === serviceId)?.node;
+      if (instance) {
+        if (instance.deletedAt) return result("retired");
+        break;
+      }
+      // The direct non-null serviceInstance query can return the same
+      // authorization error for missing and inaccessible services. Only a
+      // successful, complete environment listing proves absence.
+      if (pageInfo.hasNextPage === false) return result("retired");
+      if (!pageInfo.endCursor || pageInfo.endCursor === after) return result("unknown");
+      after = pageInfo.endCursor;
     }
-    if (body.errors?.length) return result("unknown");
-    instance = body.data?.serviceInstance;
   } catch (error) {
     if (error instanceof RateLimited) throw error;
     return result("unknown");
   }
-  if (instance === null || instance?.deletedAt) return result("retired");
   if (!instance || deadline?.aborted) return result("unknown");
   const latest = instance.latestDeployment;
   const candidates = [...instance.activeDeployments, ...(latest ? [latest] : [])].filter((d) => !d.deploymentStopped);
@@ -78,7 +104,7 @@ export async function checkApp(
   const sleeping = running.length === 0 && candidates.some((deployment) => deployment.status === "SLEEPING");
   if (sleeping && app.incident == null) return result("sleeping");
   if (!running.length && !sleeping) {
-    if (latest?.deploymentStopped || latest?.status === "REMOVED" || (!latest && instance.hasEverDeployed)) return result("down", "removed");
+    if (latest?.deploymentStopped || latest?.status === "REMOVED") return result("down", "removed");
     if (latest?.status === "CRASHED") return result("down", "crashed");
     if (latest?.status === "FAILED") return result("down", "failed");
     return result("unknown");

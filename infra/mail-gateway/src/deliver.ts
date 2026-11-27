@@ -11,16 +11,34 @@ export type Envelope = { from: string; to: string[] };
 /** Resolves with how many recipients got the message. */
 export type Deliver = (envelope: Envelope, raw: Buffer) => Promise<number>;
 
-export function sesDelivery(region: string): Deliver {
-  const client = new SESv2Client({ region });
+export function sesDelivery(
+  region: string,
+  client: { send(command: SendEmailCommand, options: { abortSignal: AbortSignal }): Promise<unknown> } =
+    new SESv2Client({ region, maxAttempts: 1 }),
+): Deliver {
   return async (envelope, raw) => {
-    await client.send(
-      new SendEmailCommand({
-        FromEmailAddress: envelope.from,
-        Destination: { ToAddresses: envelope.to },
-        Content: { Raw: { Data: raw } },
-      }),
-    );
+    try {
+      await client.send(
+        new SendEmailCommand({
+          FromEmailAddress: envelope.from,
+          Destination: { ToAddresses: envelope.to },
+          Content: { Raw: { Data: raw } },
+        }),
+        { abortSignal: AbortSignal.timeout(8000) },
+      );
+    } catch (error) {
+      const response = error as { name?: string; $metadata?: { httpStatusCode?: number } } | null;
+      const code = response?.$metadata?.httpStatusCode;
+      if (code === 429 || /^(?:TooManyRequestsException|ThrottlingException)$/.test(response?.name ?? "")) {
+        throw new DeliveryError("SES throttled the message", true);
+      }
+      if (code === 408 || (code && code >= 500)) {
+        // SES may have accepted the message before a timeout or server error.
+        throw new DeliveryError("SES delivery outcome is unknown", true, false);
+      }
+      if (code && code >= 400) throw new DeliveryError(`SES refused with ${code}`, false);
+      throw error;
+    }
     return envelope.to.length;
   };
 }
