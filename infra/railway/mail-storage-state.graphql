@@ -10,7 +10,7 @@ query MailStorage($project: String!, $environment: String!) {
         node {
           serviceId
           activeDeployments { deploymentStopped }
-          latestDeployment { deploymentStopped status }
+          latestDeployment { deploymentStopped status meta }
         }
       }
       pageInfo { hasNextPage }

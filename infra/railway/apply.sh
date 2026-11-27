@@ -21,12 +21,14 @@ require_published_main() {
 }
 
 deploy_main_source() (
-  if [ "$#" -ne 1 ]; then
-    echo "usage: $0 deploy-gateway|prepare-gateway-storage|deploy-router|deploy-monitor|deploy-backup" >&2
+  if { [ "$1" = "bootstrap-gateway-storage" ] && [ "$#" -ne 2 ]; } ||
+      { [ "$1" != "bootstrap-gateway-storage" ] && [ "$#" -ne 1 ]; }; then
+    echo "usage: $0 bootstrap-gateway-storage /absolute/path/to/cutover-snapshot.sqlite, or deploy-gateway|prepare-gateway-storage|deploy-router|deploy-monitor|deploy-backup" >&2
     exit 64
   fi
   case "$1" in
     deploy-gateway) service=mail-gateway; source_path=infra/mail-gateway ;;
+    bootstrap-gateway-storage) service=mail-gateway; source_path=infra/mail-gateway ;;
     prepare-gateway-storage) service=mail-gateway; source_path=infra/railway/mail-storage ;;
     deploy-router) service=router; source_path=infra/railway/router ;;
     deploy-monitor) service=monitor; source_path=infra/railway/ops ;;
@@ -34,20 +36,24 @@ deploy_main_source() (
     *) exit 64 ;;
   esac
   commit=$(require_published_main apply.sh check-mail-storage.ts mail-storage-state.graphql)
+  message="Runport $service $commit"
   if [ "$1" = "deploy-gateway" ]; then
     check_mail_storage mounted
     railway ssh --project "$production_project" --environment "$production_environment" \
       --service "$gateway_service" -- test -f /data/.runport-quota-cutover-ready
   elif [ "$1" = "prepare-gateway-storage" ]; then
     check_mail_storage mounted-stopped
+  elif [ "$1" = "bootstrap-gateway-storage" ]; then
+    check_mail_storage detached-stopped "$2"
+    message="Runport bootstrap mail-gateway $commit"
   fi
   umask 077
   deploy_dir=$(mktemp -d)
   trap 'rm -r -- "$deploy_dir"' EXIT
-  git -C ../.. archive "$commit:$source_path" | tar -xf - -C "$deploy_dir"
+  git -C ../.. archive "$commit:$source_path" | tar -xpf - -C "$deploy_dir"
   # Railway source uploads are separate from configuration plans. Pin both
   # the uploaded tree and the production target instead of using the link.
-  railway up "$deploy_dir" --path-as-root --detach --message "Runport $service $commit" \
+  railway up "$deploy_dir" --path-as-root --detach --message "$message" \
     --project "$production_project" --environment "$production_environment" --service "$service"
 )
 
@@ -56,8 +62,30 @@ check_mail_storage() {
     --var "project=$production_project" --var "environment=$production_environment" | bun check-mail-storage.ts "$@"
 }
 
+merge_gateway_quota() (
+  if [ "$#" -ne 2 ] || [ ! -f "$2" ]; then
+    echo "usage: $0 merge-gateway-quota /absolute/path/to/uploaded-snapshot.sqlite" >&2
+    exit 64
+  fi
+  require_published_main apply.sh check-mail-storage.ts mail-storage-state.graphql mail-storage/merge.ts >/dev/null
+  check_mail_storage mounted
+  snapshot_hash=$(shasum -a 256 <"$2" | cut -d' ' -f1)
+  merge_hash=$(shasum -a 256 <mail-storage/merge.ts | cut -d' ' -f1)
+  railway ssh --project "$production_project" --environment "$production_environment" --service "$gateway_service" -- sh -c "
+    set -eu
+    cd /tmp/runport-quota-cutover
+    printf '%s  %s\n' '$snapshot_hash' overlay.sqlite '$merge_hash' merge.ts | sha256sum -c -
+    if [ \"\$(id -u)\" -eq 0 ]; then
+      exec su-exec bun bun merge.ts overlay.sqlite volume-before.sqlite
+    fi
+    test \"\$(id -un)\" = bun
+    exec bun merge.ts overlay.sqlite volume-before.sqlite
+  "
+)
+
 case "${1:-plan}" in
-  deploy-gateway|prepare-gateway-storage|deploy-router|deploy-monitor|deploy-backup) deploy_main_source "$@"; exit ;;
+  deploy-gateway|bootstrap-gateway-storage|prepare-gateway-storage|deploy-router|deploy-monitor|deploy-backup) deploy_main_source "$@"; exit ;;
+  merge-gateway-quota) merge_gateway_quota "$@"; exit ;;
 esac
 
 get() { security find-generic-password -s "$SERVICE" -a "$1" -w 2>/dev/null; }
@@ -104,8 +132,8 @@ case "${1:-plan}" in
     fi
     git diff --quiet HEAD -- .railway || { echo "Commit the Railway configuration before applying it." >&2; exit 1; }
     if [ "$1" = "apply-mail-storage" ]; then
-      require_published_main apply.sh check-git-plan.ts check-mail-storage.ts mail-storage-state.graphql >/dev/null
-      check_mail_storage detached-stopped "$2"
+      storage_commit=$(require_published_main apply.sh check-git-plan.ts check-mail-storage.ts mail-storage-state.graphql)
+      check_mail_storage detached-bootstrapped "$2" "Runport bootstrap mail-gateway $storage_commit"
     fi
     if [ "$1" = "apply-app-alerts" ] && [ -z "$SD_APP_ALERT_RAILWAY_TOKEN" ]; then
       echo "App alerts need the app-alert-railway-token in the runport-prod Keychain." >&2; exit 1
@@ -122,7 +150,7 @@ case "${1:-plan}" in
       bun check-git-plan.ts "$plan_dir/plan.json" --app-alerts "${@:2}"
     elif [ "$1" = "apply-mail-storage" ]; then
       bun check-git-plan.ts "$plan_dir/plan.json" --mail-storage
-      check_mail_storage detached-stopped "$2"
+      check_mail_storage detached-bootstrapped "$2" "Runport bootstrap mail-gateway $storage_commit"
     else
       bun check-git-plan.ts "$plan_dir/plan.json" "${@:2}"
     fi
@@ -130,5 +158,5 @@ case "${1:-plan}" in
     ;;
   deploy-git) railway up git --path-as-root --service git --detach ;;
   deploy-analytics) railway up analytics --path-as-root --service analytics --detach ;;
-  *) echo "usage: $0 plan|apply|apply-analytics|apply-app-alerts|apply-mail-storage|prepare-gateway-storage|deploy-git|deploy-analytics|deploy-gateway|deploy-router|deploy-backup|deploy-monitor" >&2; exit 64 ;;
+  *) echo "usage: $0 plan|apply|apply-analytics|apply-app-alerts|apply-mail-storage|bootstrap-gateway-storage|prepare-gateway-storage|merge-gateway-quota|deploy-git|deploy-analytics|deploy-gateway|deploy-router|deploy-backup|deploy-monitor" >&2; exit 64 ;;
 esac

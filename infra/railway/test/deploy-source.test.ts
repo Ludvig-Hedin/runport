@@ -1,4 +1,5 @@
 import { expect, test } from "bun:test";
+import { Database } from "bun:sqlite";
 import { appendFileSync, copyFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -37,6 +38,7 @@ case "$1" in
 esac
 test "$1" = up
 test ! -e "$2/untracked.txt"
+bun -e 'import { statSync } from "node:fs"; if (!(statSync(process.argv[1]).mode & 4)) process.exit(1);' "$2/source.txt"
 cat "$2/source.txt"
 printf '%s\\n' "${"$"}{@:3}"
 `, { mode: 0o700 });
@@ -67,9 +69,17 @@ printf '%s\\n' "${"$"}{@:3}"
     setStorage(false, true);
     expect(deploy("deploy-gateway").exitCode).toBe(1);
     expect(deploy("prepare-gateway-storage").exitCode).toBe(1);
+    const snapshot = join(cwd, "cutover.sqlite");
+    const quota = new Database(snapshot);
+    quota.run("CREATE TABLE sent_by_kind (day TEXT, app TEXT, kind TEXT, recipients INTEGER)");
+    quota.close();
+    const bootstrap = deploy("bootstrap-gateway-storage", snapshot);
+    expect(bootstrap.exitCode).toBe(0);
+    expect(bootstrap.stdout.toString()).toContain(`Runport bootstrap mail-gateway ${published}`);
     setStorage(true, false);
     expect(deploy("deploy-gateway").exitCode).toBe(1);
     expect(deploy("prepare-gateway-storage").exitCode).toBe(1);
+    expect(deploy("bootstrap-gateway-storage", snapshot).exitCode).toBe(1);
     setStorage(true, true);
     writeFileSync(join(cwd, "storage-ready"), "");
 
