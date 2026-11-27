@@ -115,7 +115,7 @@ export default defineRailway(() => {
   const mailGateway = service("mail-gateway", {
     // Built from infra/mail-gateway with `railway up`; no source here.
     replicas: REGION,
-    volumeMounts: { "mail-gateway-data": { mountPath: "/data" } },
+    volumeMounts: { "/data": gatewayData },
     env: {
       GATEWAY_MASTER_KEY: secret("SD_MAIL_MASTER_KEY"),
       DELIVERY: "cloudflare",

@@ -4,6 +4,28 @@ import { assertAppAlertsPlan } from "../check-git-plan";
 const plan = (changes: unknown[], extra = {}) => ({
   kind: "railway.config.plan", version: 1, destructive: false, changeSet: { changes }, ...extra,
 });
+
+test("the app alerts apply attaches only the existing detached gateway volume at /data", () => {
+  const mount = { mountPath: "/data", volume: "volume.mail-gateway-data" };
+  const attachment = {
+    kind: "resource.update", severity: "safe", address: "service.mail-gateway",
+    field: "volumeAttachments", path: "resources.service.mail-gateway.volumeAttachments",
+    before: null, after: { "mail-gateway-data": mount },
+  };
+  expect(() => assertAppAlertsPlan(plan([attachment]))).not.toThrow();
+  for (const change of [
+    { ...attachment, before: { "mail-gateway-data": mount } },
+    { ...attachment, after: null },
+    { ...attachment, after: { "mail-gateway-data": { ...mount, mountPath: "/tmp" } } },
+    { ...attachment, after: { "mail-gateway-data": { ...mount, volume: "volume.git-data" } } },
+    { ...attachment, after: { "mail-gateway-data": mount, "git-data": mount } },
+    { ...attachment, after: { "mail-gateway-data": { ...mount, sizeMB: 1000 } } },
+    { ...attachment, address: "service.git", path: "resources.service.git.volumeAttachments" },
+    { ...attachment, address: "volume.mail-gateway-data", kind: "resource.create" },
+  ]) {
+    expect(() => assertAppAlertsPlan(plan([change]))).toThrow();
+  }
+});
 const variable = (address: string, key: string, value: string) => ({
   kind: "variable.set", severity: "safe", address, variable: key,
   path: `resources.${address}.variables.${key}`, after: { type: "literal", value },

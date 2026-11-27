@@ -9,9 +9,9 @@ else the admin. The admin sleeps when idle; the router waits for it to wake.
 - `./apply.sh plan` previews, `./apply.sh apply` applies. Secrets come from the
   Keychain service `runport-prod` and are generated once if missing. Never
   run `railway config apply` directly: the SD_* secrets would be missing.
-- `router`, `mail-gateway`, `backup` and `monitor` are built from this repo:
-  `railway up router --path-as-root --service router`, `../mail-gateway`
-  for the gateway, `ops` for both `backup` and `monitor`.
+- Build the router with `railway up router --path-as-root --service router`.
+  `./apply.sh deploy-gateway`, `deploy-backup` and `deploy-monitor` upload
+  the corresponding committed source from published `main` to production.
 - Mail: the gateway posts to the `runport-mail` Worker
   (`infra/cloudflare-mail`, deploy with `bunx wrangler deploy`), which sends
   with Cloudflare Email Sending from runport.app (apps.ludvighedin.com still allowed). Transactional mail
@@ -154,9 +154,12 @@ gateway and router together before provisioning app reporting. Provision a
 dedicated token that can read the environments of deployed Runport apps, and
 save it as `app-alert-railway-token` in the `runport-prod` Keychain. Use
 `./apply.sh apply-app-alerts` to apply the pinned plan for the two monitor
-credentials and the gateway's owner address. The script derives the
-monitor key from the gateway master key. `./apply.sh deploy-monitor`
-publishes the monitor code.
+credentials and the gateway's owner address. The plan also allows the one-time
+attachment of the existing `mail-gateway-data` volume at `/data`. Back up the
+running gateway's SQLite data before attaching it. Back up any existing volume
+state before importing the live quota counts. The script derives the monitor
+key from the gateway master key. Use `./apply.sh deploy-gateway` and
+`./apply.sh deploy-monitor` for the source deployment.
 
 ## Runport Git
 

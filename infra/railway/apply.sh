@@ -6,6 +6,38 @@ set -euo pipefail
 cd "$(dirname "$0")"
 SERVICE=runport-prod
 
+deploy_main_source() (
+  if [ "$#" -ne 1 ]; then
+    echo "usage: $0 deploy-gateway|deploy-monitor|deploy-backup" >&2
+    exit 64
+  fi
+  case "$1" in
+    deploy-gateway) service=mail-gateway; source_path=infra/mail-gateway ;;
+    deploy-monitor) service=monitor; source_path=infra/railway/ops ;;
+    deploy-backup) service=backup; source_path=infra/railway/ops ;;
+    *) exit 64 ;;
+  esac
+  commit=$(git rev-parse HEAD)
+  main=$(git ls-remote --exit-code origin refs/heads/main)
+  if [ "$commit" != "${main%%[[:space:]]*}" ] || ! git diff --quiet HEAD -- apply.sh; then
+    echo "Deploy from an unmodified apply.sh at the published main commit." >&2
+    exit 1
+  fi
+  umask 077
+  deploy_dir=$(mktemp -d)
+  trap 'rm -r -- "$deploy_dir"' EXIT
+  git -C ../.. archive "$commit:$source_path" | tar -xf - -C "$deploy_dir"
+  # Railway source uploads are separate from configuration plans. Pin both
+  # the uploaded tree and the production target instead of using the link.
+  railway up "$deploy_dir" --path-as-root --detach --message "Runport $service $commit" \
+    --project c93df5f9-ac8b-453d-815a-e9fedd991ca1 \
+    --environment d95ac74a-26dc-4738-8765-3ab1389e057f --service "$service"
+)
+
+case "${1:-plan}" in
+  deploy-gateway|deploy-monitor|deploy-backup) deploy_main_source "$@"; exit ;;
+esac
+
 get() { security find-generic-password -s "$SERVICE" -a "$1" -w 2>/dev/null; }
 ensure() {
   local name=$1 bytes=${2:-32}
@@ -65,7 +97,5 @@ case "${1:-plan}" in
     ;;
   deploy-git) railway up git --path-as-root --service git --detach ;;
   deploy-analytics) railway up analytics --path-as-root --service analytics --detach ;;
-  deploy-backup) railway up ops --path-as-root --service backup --detach ;;
-  deploy-monitor) railway up ops --path-as-root --service monitor --detach ;;
-  *) echo "usage: $0 plan|apply|apply-analytics|apply-app-alerts|deploy-git|deploy-analytics|deploy-backup|deploy-monitor" >&2; exit 64 ;;
+  *) echo "usage: $0 plan|apply|apply-analytics|apply-app-alerts|deploy-git|deploy-analytics|deploy-gateway|deploy-backup|deploy-monitor" >&2; exit 64 ;;
 esac

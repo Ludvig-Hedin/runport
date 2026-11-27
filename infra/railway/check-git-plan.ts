@@ -75,7 +75,14 @@ export function assertAppAlertsPlan(plan: unknown, requireNoop = false): void {
   }
   if (requireNoop && changeSet.changes.length) throw new Error("Railway plan contains changes. No-op apply refused.");
   for (const change of changeSet.changes) {
-    const { kind, address, severity, path, variable, after } = change ?? {};
+    const { kind, address, severity, path, variable, field, before, after } = change ?? {};
+    const mount = after?.["mail-gateway-data"];
+    const attachesGatewayVolume = severity === "safe" && kind === "resource.update" &&
+      address === "service.mail-gateway" && field === "volumeAttachments" &&
+      path === "resources.service.mail-gateway.volumeAttachments" && before === null &&
+      Object.keys(after ?? {}).length === 1 && Object.keys(mount ?? {}).length === 2 &&
+      mount?.mountPath === "/data" && mount.volume === "volume.mail-gateway-data";
+    if (attachesGatewayVolume) continue;
     const value = after?.type === "literal" && typeof after.value === "string" ? after.value : "";
     const allowed = (address === "service.mail-gateway" && variable === "ALERT_TO" && value === "ludvig@ludvighedin.com") ||
       (address === "service.monitor" && variable === "RUNPORT_ALERT_MONITOR_KEY" && /^[a-f0-9]{64}$/.test(value)) ||
