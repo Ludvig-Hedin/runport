@@ -51,8 +51,8 @@ brand/               logo
 
 Start with [infra/appwrite/README.md](infra/appwrite/README.md).
 
-To use Runport Git, provision the Git service and save its access token as
-`git-api-token` under the `runport-prod` Keychain service. From the MCP, call
+To use Runport Git, set up its non-admin provisioning account as described in
+[the Railway guide](infra/railway/README.md#runport-git). From the MCP, call
 `create_app` with `git: "runport"` or leave the option out. The GitHub option
 uses the GitHub CLI's existing login. Both hosts deploy through Railway using
 the app's local folder.

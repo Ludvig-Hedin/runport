@@ -110,10 +110,6 @@ async function writeMcpConfig(folder: string, env: Record<string, string>): Prom
 export async function createApp(input: CreateAppInput): Promise<CreateAppResult> {
   const slug = toSlug(input.name);
   const steps: string[] = [];
-  if (!(await admin.health())) {
-    throw new Error(`Appwrite is not reachable at ${config.endpoint}. Start it: cd infra/appwrite && docker compose up -d`);
-  }
-
   const registry = await loadRegistry();
   const known = registry.apps.find((a) => a.slug === slug);
   const git = selectGitHost(input.git, known?.git);
@@ -123,15 +119,26 @@ export async function createApp(input: CreateAppInput): Promise<CreateAppResult>
   const owner = registry.apps.find((a) => a.projectId === projectId && a.slug !== slug);
   if (owner) throw new Error(`Project ${projectId} already belongs to app "${owner.slug}".`);
   if (input.apiKey && !/^[A-Za-z0-9_.-]+$/.test(input.apiKey)) throw new Error("That server key has unexpected characters.");
-  let createdByPlatform = known?.createdByPlatform ?? !input.projectId;
+  if (known && known.projectId !== projectId) throw new Error(`This app already uses project "${known.projectId}".`);
+  const record: AppRecord = {
+    slug, name: input.name, projectId, folder, port, git,
+    createdByPlatform: known?.createdByPlatform ?? !input.projectId,
+    repoUrl: known?.repoUrl ?? null,
+    createdAt: known?.createdAt ?? new Date().toISOString(),
+    ...(!known || known.setupPending ? { setupPending: true } : {}),
+  };
+  // Reserve the chosen host before Appwrite, template or package setup can fail.
+  if (!known) await upsertApp(record);
+  if (!(await admin.health())) {
+    throw new Error(`Appwrite is not reachable at ${config.endpoint}. Start it: cd infra/appwrite && docker compose up -d`);
+  }
 
-  if (input.projectId) {
+  if (!record.createdByPlatform) {
     steps.push(`using existing project ${projectId}`);
   } else if (await admin.getProject(projectId)) {
     steps.push(`project ${projectId} already exists`);
   } else {
     await admin.createProject(projectId, input.name);
-    createdByPlatform = true;
     steps.push(`created project ${projectId}`);
   }
 
@@ -152,7 +159,7 @@ export async function createApp(input: CreateAppInput): Promise<CreateAppResult>
   }
   await writeMcpConfig(folder, env);
 
-  if (!input.projectId) {
+  if (record.createdByPlatform) {
     await ensurePlatform(projectId, "localhost");
     steps.push("allowed localhost as web platform");
     await ensureMail(projectId, slug, input.name);
@@ -163,20 +170,7 @@ export async function createApp(input: CreateAppInput): Promise<CreateAppResult>
   await run(["bun", "run", "setup"], folder);
   steps.push("installed packages and created tables");
 
-  const record: AppRecord = {
-    slug,
-    name: input.name,
-    projectId,
-    createdByPlatform,
-    folder,
-    port,
-    repoUrl: known?.repoUrl ?? null,
-    git,
-    createdAt: known?.createdAt ?? new Date().toISOString(),
-  };
-  // Save the host choice before creating its remote, including across a process restart.
-  await upsertApp(record);
-
+  delete record.setupPending;
   const hostLabel = git === "runport" ? "Runport" : "GitHub";
   try {
     record.repoUrl = await (git === "runport" ? createRunportRepo(folder, slug) : createGitHubRepo(folder, slug));
@@ -184,7 +178,7 @@ export async function createApp(input: CreateAppInput): Promise<CreateAppResult>
   } catch (error) {
     steps.push(`${hostLabel} repo setup failed: ${(error as Error).message}. Rerun create_app to retry.`);
   }
-  if (record.repoUrl !== (known?.repoUrl ?? null)) await upsertApp(record);
+  await upsertApp(record);
 
   return {
     ...record,
@@ -208,7 +202,9 @@ export async function deleteApp(slug: string, confirm: string): Promise<DeleteRe
   const notes: string[] = [];
 
   let projectDeleted = false;
-  if (!app.createdByPlatform) {
+  if (app.setupPending) {
+    notes.push(`Kept Appwrite project ${app.projectId}: app setup did not finish.`);
+  } else if (!app.createdByPlatform) {
     notes.push(`Kept Appwrite project ${app.projectId}: it existed before the platform used it.`);
   } else if (await admin.getProject(app.projectId)) {
     await admin.deleteProject(app.projectId);

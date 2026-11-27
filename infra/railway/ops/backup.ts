@@ -1,6 +1,7 @@
 import { mkdtemp, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { archiveKey, expiredArchives, finishArchive, type ArchiveKind } from "./retention";
 import { alertOwner, bucket, required } from "./shared";
 
 const KEEP_DAYS = Number(process.env.KEEP_DAYS ?? 14);
@@ -16,15 +17,18 @@ async function save(file: string, key: string): Promise<void> {
   const size = (await stat(file)).size;
   if (size < 1024) throw new Error(`Backup is only ${size} bytes.`);
   const destination = bucket.file(key);
-  if (!(await destination.exists())) await destination.write(Bun.file(file));
-  console.log(JSON.stringify({ result: "backup ok", key, bytes: (await destination.stat()).size }));
+  const exists = await destination.exists();
+  if (!exists) await destination.write(Bun.file(file));
+  const stored = (await destination.stat()).size;
+  if (stored < 1024 || (!exists && stored !== size)) throw new Error("Stored backup size did not verify.");
+  console.log(JSON.stringify({ result: "backup ok", key, bytes: stored }));
 }
 
-async function backupAppwrite(dir: string): Promise<void> {
-  const file = join(dir, "appwrite.dump");
-  await run(["pg_dump", "--format=custom", "--no-owner", `--file=${file}`]);
+async function backupDatabase(dir: string, kind: "appwrite" | "analytics", database?: string): Promise<void> {
+  const file = join(dir, `${kind}.dump`);
+  await run(["pg_dump", "--format=custom", "--no-owner", `--file=${file}`, ...(database ? [`--dbname=${database}`] : [])]);
   await run(["pg_restore", "--list", file]);
-  await save(file, `backups/appwrite-${day}.dump`);
+  await save(file, archiveKey(kind, day));
 }
 
 async function backupGit(dir: string): Promise<void> {
@@ -38,29 +42,36 @@ async function backupGit(dir: string): Promise<void> {
   if (!res.ok) throw new Error(`Git backup service returned HTTP ${res.status}.`);
   await Bun.write(file, res);
   await run(["tar", "-tzf", file, "gitea/conf/app.ini", "gitea/forgejo.db", "git"]);
-  await save(file, `backups/git-${day}.tar.gz`);
+  await save(file, archiveKey("git", day));
 }
 
-async function prune(): Promise<void> {
-  if (!Number.isInteger(KEEP_DAYS) || KEEP_DAYS < 1) throw new Error("KEEP_DAYS must be a positive integer.");
+async function prune(kind: ArchiveKind): Promise<void> {
   const cutoff = Date.parse(day) - (KEEP_DAYS - 1) * 24 * 60 * 60 * 1000;
-  const listed = await bucket.list({ prefix: "backups/" });
-  for (const object of listed.contents ?? []) {
-    const date = /^backups\/(?:appwrite-\d{4}-\d{2}-\d{2}\.dump|git-\d{4}-\d{2}-\d{2}\.tar\.gz)$/.test(object.key)
-      ? Date.parse(object.key.match(/\d{4}-\d{2}-\d{2}/)![0])
-      : NaN;
-    if (date < cutoff) await bucket.delete(object.key);
-  }
+  const keys: string[] = [];
+  let continuationToken: string | undefined;
+  do {
+    const listed = await bucket.list({ prefix: `backups/${kind}-`, continuationToken });
+    keys.push(...(listed.contents ?? []).map(({ key }) => key));
+    continuationToken = listed.nextContinuationToken;
+  } while (continuationToken);
+  for (const key of expiredArchives(keys, kind, cutoff, archiveKey(kind, day))) await bucket.delete(key);
 }
 
 const dir = await mkdtemp(join(tmpdir(), "runport-backup-"));
 try {
-  const results = await Promise.allSettled([backupAppwrite(dir), backupGit(dir)]);
-  const failures = results.flatMap((result, i) =>
-    result.status === "rejected" ? [`${i === 0 ? "Appwrite" : "Runport Git"}: ${(result.reason as Error).message}`] : [],
-  );
+  if (!Number.isInteger(KEEP_DAYS) || KEEP_DAYS < 1) throw new Error("KEEP_DAYS must be a positive integer.");
+  const jobs: [ArchiveKind, () => Promise<void>][] = [
+    ["appwrite", () => backupDatabase(dir, "appwrite")],
+    ["git", () => backupGit(dir)],
+  ];
+  const analyticsDatabase = process.env.ANALYTICS_DATABASE;
+  if (analyticsDatabase) jobs.push(["analytics", () => backupDatabase(dir, "analytics", analyticsDatabase)]);
+  const results = await Promise.allSettled(jobs.map(([kind, upload]) => finishArchive(upload, () => prune(kind))));
+  const failures = jobs.flatMap(([kind], i) => {
+    const result = results[i];
+    return result?.status === "rejected" ? [`${kind}: ${(result.reason as Error).message}`] : [];
+  });
   if (failures.length) throw new Error(failures.join("\n"));
-  await prune();
 } catch (error) {
   console.error(JSON.stringify({ result: "backup failed", reason: (error as Error).message }));
   await alertOwner("Runport: nightly backup failed", `Backup for ${day} failed.\n\n${(error as Error).message}\n`).catch(() => {});

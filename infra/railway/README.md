@@ -16,8 +16,10 @@ else the admin. The admin sleeps when idle; the router waits for it to wake.
   (`infra/cloudflare-mail`, deploy with `bunx wrangler deploy`), which sends
   with Cloudflare Email Sending from runport.app (apps.ludvighedin.com still allowed). Transactional mail
   only; newsletters need another path.
-- `backup` runs nightly at 01:00 UTC. It stores an Appwrite database dump
-  and a Forgejo volume archive under `backups/` in the bucket for 14 days.
+- `backup` runs nightly at 01:00 UTC. It stores Appwrite and analytics database
+  dumps and a Forgejo volume archive under `backups/` for 14 days. It
+  prunes each set of archives after verifying that night's copy and keeps
+  its newest good copy.
   `monitor` runs every five minutes and emails ludvig@ludvighedin.com
   when a service is down or a backup is stale.
   Usage statistics are off, so there is no ClickHouse. Appwrite's
@@ -46,13 +48,24 @@ and repositories are private. Git Actions and SSH are disabled.
 The service stays awake so the five-minute monitor can probe it and Git
 clients can connect on their first request.
 
-Use `./apply.sh plan` and `./apply.sh apply` to configure the Git service,
+Use `./apply.sh plan` and `./apply.sh apply` to configure the Git service.
+The apply command checks a pinned plan and allows only Git, its new volume,
+and the Git settings for the backup and monitor jobs. Review the plan first,
 then `./apply.sh deploy-git` to upload its image build. When HTTPS and the
 private backup endpoint work, run `./apply.sh deploy-backup`. Wait for the
 first Git archive before running `./apply.sh deploy-monitor`.
-The `runport-prod` Keychain service holds the owner login and the
-`git-api-token` for the MCP. Give that token `write:user` and
-`write:repository` scopes. The backup endpoint uses a separate
+Create a dedicated Forgejo user without administrator privileges. Store
+its password as `git-provision-password` and its access token as
+`git-provision-token` under the `runport-prod` Keychain service. Give the
+provisioning token `write:user` and `write:repository` scopes so the MCP
+can create private repositories. The MCP uses the password to mint a separate
+`write:repository` token scoped to each repository and stores only that token
+with Git's macOS credential helper.
+
+For a custom `PLATFORM_GIT_URL`, explicitly set
+`PLATFORM_GIT_KEYCHAIN_SERVICE` and append `@<HTTPS origin>` to the two
+Keychain account names. The production credential names are used only for
+`https://git.runport.app`. The private backup endpoint uses its own
 `git-backup-token`, which `apply.sh` creates once.
 
 Each archive has `gitea/` (including config and SQLite) and `git/`

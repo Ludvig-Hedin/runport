@@ -18,7 +18,7 @@ async function ok(url: string): Promise<string | null> {
   }
 }
 
-async function backupFresh(kind: "appwrite" | "git"): Promise<string | null> {
+async function backupFresh(kind: "appwrite" | "git" | "analytics"): Promise<string | null> {
   const listed = await bucket.list({ prefix: `backups/${kind}-` });
   const newest = (listed.contents ?? []).map((o) => Date.parse(String(o.lastModified))).sort((a, b) => a - b).at(-1);
   if (!newest) return "no backup found";
@@ -38,6 +38,16 @@ if (process.env.GIT_HEALTH_URL) {
   if (now.getUTCHours() !== 1 || now.getUTCMinutes() >= 10) {
     const url = process.env.GIT_HEALTH_URL;
     checks["Runport Git"] = () => ok(url);
+  }
+}
+
+const analyticsHealthUrl = process.env.ANALYTICS_HEALTH_URL;
+if (analyticsHealthUrl) {
+  const results = await Promise.allSettled([ok(analyticsHealthUrl), backupFresh("analytics")]);
+  for (const [index, result] of results.entries()) {
+    const check = index === 0 ? "Analytics service" : "Analytics backup";
+    const problem = result.status === "fulfilled" ? result.value : String(result.reason);
+    console[problem ? "error" : "log"](JSON.stringify({ check, result: problem ? "failing" : "ok", problem }));
   }
 }
 

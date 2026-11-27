@@ -16,6 +16,7 @@ export type AppRecord = {
   port: number;
   repoUrl: string | null;
   git: GitHost;
+  setupPending?: true;
   createdAt: string;
 };
 
