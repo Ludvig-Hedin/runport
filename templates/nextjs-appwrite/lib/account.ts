@@ -2,20 +2,21 @@
 
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
-import { Query } from "node-appwrite";
+import { AppwriteException, Query } from "node-appwrite";
 import { routes } from "@/runport.config";
 import { createAdminClient, createSessionClient, sessionCookieName } from "./appwrite";
 import { TOO_MANY_ATTEMPTS, friendlyError } from "./auth-errors";
 import { authMode } from "./config";
+import { setFlash } from "./flash";
 import { allowed } from "./rate-limit";
-import { DATABASE_ID, TABLES } from "./schema";
+import { DATABASE_ID, OWNER_COLUMN, TABLES } from "./schema";
 import { getUser } from "./session";
 
 // What a signed-in person can do on their own account page. Every action acts
 // as that person through their session, except deleting the account, which
-// needs the server key after their own rows are gone.
+// uses the server key and selects rows by the server-set `owner` column only.
 
-export type AccountState = { error?: string; notice?: string };
+export type AccountState = { error?: string; notice?: string; name?: string };
 
 const SIGNED_OUT: AccountState = { error: "You are signed out. Sign in again." };
 
@@ -26,18 +27,28 @@ async function guard(): Promise<{ email: string } | AccountState> {
   return { email: user.email };
 }
 
+/** Deletes every session except the one making this request. */
+async function endOtherSessions(): Promise<number> {
+  const { account } = await createSessionClient();
+  const { sessions } = await account.listSessions();
+  const others = sessions.filter((s) => !s.current);
+  await Promise.all(others.map((s) => account.deleteSession({ sessionId: s.$id })));
+  return others.length;
+}
+
 export async function updateName(_: AccountState, form: FormData): Promise<AccountState> {
   const check = await guard();
   if ("error" in check) return check;
   const name = String(form.get("name") ?? "").trim();
+  if (!name) return { error: "Enter a name." };
   if (name.length > 128) return { error: "Use at most 128 characters." };
   try {
     const { account } = await createSessionClient();
-    await account.updateName({ name });
+    const saved = await account.updateName({ name });
+    return { notice: "Saved.", name: saved.name };
   } catch (error) {
     return { error: friendlyError(error, "Could not save the name.") };
   }
-  return { notice: "Saved." };
 }
 
 export async function changePassword(_: AccountState, form: FormData): Promise<AccountState> {
@@ -52,9 +63,18 @@ export async function changePassword(_: AccountState, form: FormData): Promise<A
     const { account } = await createSessionClient();
     await account.updatePassword({ password, oldPassword });
   } catch (error) {
-    return { error: friendlyError(error, "Could not change the password. Check the current password.") };
+    if (error instanceof AppwriteException && error.type === "user_invalid_credentials") {
+      return { error: "That current password is wrong." };
+    }
+    return { error: friendlyError(error, "Could not change the password.") };
   }
-  return { notice: "Password changed." };
+  // Anyone who knew the old password must not stay signed in elsewhere.
+  try {
+    await endOtherSessions();
+  } catch {
+    return { notice: "Password changed. Sign out your other devices below to be safe." };
+  }
+  return { notice: "Password changed. Other devices were signed out." };
 }
 
 /** Signs out one other device, or every other device when no id is given. */
@@ -62,17 +82,57 @@ export async function signOutDevices(sessionId?: string): Promise<AccountState> 
   const check = await guard();
   if ("error" in check) return check;
   try {
-    const { account } = await createSessionClient();
-    const { sessions } = await account.listSessions();
-    const targets = sessions.filter((s) => !s.current && (!sessionId || s.$id === sessionId));
-    await Promise.all(targets.map((s) => account.deleteSession({ sessionId: s.$id })));
+    if (!sessionId) {
+      await endOtherSessions();
+    } else {
+      const { account } = await createSessionClient();
+      const { sessions } = await account.listSessions();
+      const target = sessions.find((s) => s.$id === sessionId && !s.current);
+      if (target) await account.deleteSession({ sessionId: target.$id });
+    }
   } catch (error) {
     return { error: friendlyError(error, "Could not sign out that device.") };
   }
   return { notice: sessionId ? "Device signed out." : "Signed out everywhere else." };
 }
 
-/** Deletes the person's own rows in every app table, then the account itself. */
+const PAGE = 100;
+const MAX_ROUNDS = 1000; // 100,000 rows per table; anything bigger needs a job, not a click
+
+/** Deletes every row this person owns in one table, page by page, until none are left. */
+async function deleteOwnedRows(tableId: string, userId: string): Promise<void> {
+  const { tables } = createAdminClient();
+  const mine = [Query.equal(OWNER_COLUMN, userId), Query.limit(PAGE)];
+  for (let round = 0; round < MAX_ROUNDS; round++) {
+    const { rows } = await tables.listRows({ databaseId: DATABASE_ID, tableId, queries: mine });
+    if (rows.length === 0) return;
+    // Re-check each row: the query already filters, this guards against surprises.
+    const own = rows.filter((row) => (row as unknown as Record<string, unknown>)[OWNER_COLUMN] === userId);
+    if (own.length !== rows.length) throw new Error(`Unexpected rows in ${tableId}`);
+    for (const row of own) await tables.deleteRow({ databaseId: DATABASE_ID, tableId, rowId: row.$id });
+  }
+  throw new Error(`Too many rows in ${tableId} to delete in one go`);
+}
+
+async function ownedRowsLeft(userId: string): Promise<number> {
+  const { tables } = createAdminClient();
+  let left = 0;
+  for (const table of TABLES.filter((t) => t.personal)) {
+    const { total } = await tables.listRows({
+      databaseId: DATABASE_ID,
+      tableId: table.id,
+      queries: [Query.equal(OWNER_COLUMN, userId), Query.limit(1)],
+    });
+    left += total;
+  }
+  return left;
+}
+
+/**
+ * Deletes the person's own rows in every personal table, checks none are left,
+ * then deletes the account. If anything fails the account stays, so the person
+ * can simply try again: each step picks up where the last attempt stopped.
+ */
 export async function deleteAccount(_: AccountState, form: FormData): Promise<AccountState> {
   const user = await getUser();
   if (!user) return SIGNED_OUT;
@@ -81,23 +141,21 @@ export async function deleteAccount(_: AccountState, form: FormData): Promise<Ac
     return { error: "Type your email address exactly to confirm." };
   }
   try {
-    // The session client only sees rows this person can read, so shared rows
-    // owned by others are never touched. Rows they can read but not delete fail
-    // loudly instead of leaving a half-deleted account.
-    const { tables } = await createSessionClient();
-    for (const table of TABLES) {
-      for (;;) {
-        const { rows } = await tables.listRows({ databaseId: DATABASE_ID, tableId: table.id, queries: [Query.limit(100)] });
-        const own = rows.filter((row) => row.$permissions.some((p) => p.includes(`user:${user.$id}`)));
-        if (own.length === 0) break;
-        await Promise.all(own.map((row) => tables.deleteRow({ databaseId: DATABASE_ID, tableId: table.id, rowId: row.$id })));
-        if (own.length < rows.length) break;
-      }
+    // Other devices could keep adding rows while this runs, so sign them out first.
+    await endOtherSessions();
+    for (let attempt = 0; attempt < 3; attempt++) {
+      for (const table of TABLES.filter((t) => t.personal)) await deleteOwnedRows(table.id, user.$id);
+      if ((await ownedRowsLeft(user.$id)) === 0) break;
+      if (attempt === 2) throw new Error("Rows kept appearing during deletion");
     }
     await createAdminClient().users.delete({ userId: user.$id });
   } catch (error) {
-    return { error: friendlyError(error, "Could not delete the account. Nothing was removed from your sign-in.") };
+    console.error("account deletion stopped", error);
+    return { error: "Deleting stopped before it finished. Your account still exists. Try again to finish." };
   }
+  // The account and its sessions are gone; a last sweep catches a row written in the final moment.
+  for (const table of TABLES.filter((t) => t.personal)) await deleteOwnedRows(table.id, user.$id).catch(() => {});
   (await cookies()).delete(sessionCookieName());
-  redirect(`${routes.afterSignOut}?deleted=1`);
+  await setFlash("Your account and its data have been deleted.");
+  redirect(routes.afterSignOut);
 }

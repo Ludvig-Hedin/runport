@@ -26,9 +26,12 @@ function readChoice(): ConsentChoice | null {
   const raw = document.cookie.split("; ").find((c) => c.startsWith(`${COOKIE}=`));
   if (!raw) return null;
   try {
-    const parsed = JSON.parse(decodeURIComponent(raw.slice(COOKIE.length + 1))) as Partial<ConsentChoice> & { v?: number };
-    if (parsed.v !== consentConfig.version) return null; // the categories changed: ask again
-    return { ...NONE, ...parsed };
+    const parsed: unknown = JSON.parse(decodeURIComponent(raw.slice(COOKIE.length + 1)));
+    if (typeof parsed !== "object" || parsed === null) return null;
+    const record = parsed as Record<string, unknown>;
+    if (record.v !== consentConfig.version) return null; // the categories changed: ask again
+    // Only a literal true counts as consent; anything else is a no.
+    return { analytics: record.analytics === true, marketing: record.marketing === true, preferences: record.preferences === true };
   } catch {
     return null;
   }
@@ -52,7 +55,7 @@ const ConsentContext = createContext<ConsentContextValue>({ choice: null, openSe
 export function useConsent(category: ConsentCategory): boolean {
   const { choice } = useContext(ConsentContext);
   if (!consentConfig.categories.includes(category)) return false;
-  return choice?.[category] ?? false;
+  return choice?.[category] === true;
 }
 
 /** Renders its children only after the visitor allowed `category`. */
