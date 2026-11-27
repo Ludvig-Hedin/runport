@@ -47,19 +47,21 @@ host's variables, then restart or redeploy.
 | `APP_URL` | `http://localhost:$PORT` | Public address for OAuth and reset links. Its host must be a platform in the Appwrite project. |
 | `SITE_PASSWORD` | unset | Locks every page behind /unlock. Changing it signs every visitor out of the lock. |
 | `ALLOW_INDEXING` | off | `1` lets search engines index the site, but only when `RAILWAY_ENVIRONMENT_NAME` is unset or `production` and the site is not locked. Otherwise robots.txt, the meta tag and an `X-Robots-Tag` header say noindex. |
-| `ANALYTICS_URL`, `ANALYTICS_SITE_ID` | unset | Runport sets these for hosted apps. Both enable visitor analytics on production builds, excluding Railway preview environments. |
+| `ANALYTICS_URL`, `ANALYTICS_SITE_ID`, `ANALYTICS_INGEST_TOKEN` | unset | Runport sets these for hosted apps. All three enable visitor analytics on production builds, excluding Railway preview environments. Keep the per-site token on the server. |
 
 ## Visitor analytics
 
 Pageviews go to Runport's Umami through this app's own domain. The tracker
 uses no cookies, skips visitors with Do Not Track or Global Privacy Control
-enabled, and excludes URL query strings and fragments. A locked site starts
-tracking after the visitor unlocks it. Leave either analytics variable unset
-to disable tracking.
+enabled, and excludes page titles, URL query strings and fragments. A locked
+site starts tracking after the visitor unlocks it. Leave any analytics variable
+unset to disable tracking. Add public routes to `lib/analytics-policy.ts`.
+Use `/items/[id]` for dynamic paths so actual IDs are excluded.
 
 For a custom event, call `track("filter-applied", { filter: "open" })` in a
-client component using `import { track } from "@/lib/analytics"`. Event props,
-page titles and paths should contain no personal or confidential information.
+client component using `import { track } from "@/lib/analytics"`. First add
+`"filter-applied": { filter: ["open", "all"] }` to `events` in that policy.
+Unknown event names, fields, and values are discarded.
 
 ## Appwrite MCP
 

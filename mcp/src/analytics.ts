@@ -1,10 +1,11 @@
-import { createHash } from "node:crypto";
+import { createHash, createHmac } from "node:crypto";
 import { config } from "./config";
 import { readSecret } from "./keychain";
 
 const namespace = Buffer.from("0c3e97afecbe4f608925d26e88b17945", "hex");
+const runportOrigin = "https://analytics.runport.app";
 
-function websiteId(slug: string): string {
+export function websiteId(slug: string): string {
   const bytes = createHash("sha1").update(namespace).update(slug).digest();
   bytes[6] = (bytes[6]! & 0x0f) | 0x50;
   bytes[8] = (bytes[8]! & 0x3f) | 0x80;
@@ -13,7 +14,7 @@ function websiteId(slug: string): string {
 
 type Options = {
   origin?: string;
-  password?: () => Promise<string>;
+  credentials?: { username: string; password: string; ingestSecret: string };
   request?: (url: string, init?: RequestInit) => Promise<Response>;
 };
 type Website = { id: string; domain: string };
@@ -21,9 +22,10 @@ type Website = { id: string; domain: string };
 export async function ensureAnalytics(slug: string, domain?: string, options: Options = {}): Promise<{
   ANALYTICS_URL?: string;
   ANALYTICS_SITE_ID?: string;
+  ANALYTICS_INGEST_TOKEN?: string;
 }> {
   const origin = options.origin ?? process.env.PLATFORM_ANALYTICS_URL ??
-    (config.keychainService === "runport-prod" ? "https://analytics.runport.app" : undefined);
+    (config.keychainService === "runport-prod" ? runportOrigin : undefined);
   if (!origin) return {};
 
   const url = new URL(origin);
@@ -31,7 +33,21 @@ export async function ensureAnalytics(slug: string, domain?: string, options: Op
     throw new Error("PLATFORM_ANALYTICS_URL must be a plain HTTPS origin.");
   }
   const request = options.request ?? fetch;
-  const password = options.password ?? (() => readSecret("analytics-admin-password"));
+  const credentials = options.credentials ?? (url.origin === runportOrigin && config.keychainService === "runport-prod"
+    ? {
+        username: "runport-provisioner",
+        password: await readSecret("analytics-provisioner-password"),
+        ingestSecret: await readSecret("analytics-ingest-secret"),
+      }
+    : {
+        username: process.env.PLATFORM_ANALYTICS_USERNAME,
+        password: process.env.PLATFORM_ANALYTICS_PASSWORD,
+        ingestSecret: process.env.PLATFORM_ANALYTICS_INGEST_SECRET,
+      });
+  const { username, password, ingestSecret } = credentials;
+  if (!username || !password || !ingestSecret || !/^[0-9a-f]{64}$/.test(ingestSecret)) {
+    throw new Error("Analytics requires explicit provisioning credentials and a 32-byte hex ingestion secret for this origin.");
+  }
   const send = (path: string, payload?: unknown, token?: string) =>
     request(url.origin + path, {
       method: payload === undefined ? "GET" : "POST",
@@ -44,10 +60,12 @@ export async function ensureAnalytics(slug: string, domain?: string, options: Op
       signal: AbortSignal.timeout(10_000),
     });
 
-  const login = await send("/api/auth/login", { username: "admin", password: await password() });
+  const login = await send("/api/auth/login", { username, password });
   if (!login.ok) throw new Error(`Analytics sign-in failed (HTTP ${login.status}).`);
-  const { token, passwordChangeRequired } = await login.json() as { token?: string; passwordChangeRequired?: boolean };
-  if (!token || passwordChangeRequired) throw new Error("Umami needs a secured admin account before provisioning sites.");
+  const { token, user } = await login.json() as { token?: string; user?: { role?: string; passwordChangeRequired?: boolean } };
+  if (!token || user?.role !== "user" || user.passwordChangeRequired) {
+    throw new Error("Umami provisioning requires a secured, non-admin user account.");
+  }
 
   const id = websiteId(slug);
   const path = `/api/websites/${id}`;
@@ -71,5 +89,6 @@ export async function ensureAnalytics(slug: string, domain?: string, options: Op
     const updated = await send(path, { domain }, token);
     if (!updated.ok) throw new Error(`Analytics domain update failed (HTTP ${updated.status}).`);
   }
-  return { ANALYTICS_URL: url.origin, ANALYTICS_SITE_ID: id };
+  const ingestToken = createHmac("sha256", ingestSecret).update(`runport:analytics:ingest:v1:${id}`).digest("hex");
+  return { ANALYTICS_URL: url.origin, ANALYTICS_SITE_ID: id, ANALYTICS_INGEST_TOKEN: ingestToken };
 }

@@ -9,7 +9,7 @@ import { config } from "./config";
 import { readSecret } from "./keychain";
 import { loadRegistry } from "./registry";
 import { assertAppwriteId } from "./slug";
-import { ensureAnalytics } from "./analytics";
+import { provisionAppAnalytics } from "./analytics-integration";
 
 const slug = assertAppwriteId(process.argv[2] ?? "");
 const app = (await loadRegistry()).apps.find((a) => a.slug === slug);
@@ -89,8 +89,14 @@ console.log("tables ready");
 
 // 4. App settings on Railway, then deploy the folder.
 // Telemetry off, so an idle app sends nothing out and Railway can put it to sleep.
-const analytics = await ensureAnalytics(slug, domain);
-const vars = { APPWRITE_ENDPOINT: config.endpoint, APPWRITE_PROJECT_ID: slug, APPWRITE_API_KEY: key, APP_URL: `https://${domain}`, PORT: String(app.port), NEXT_TELEMETRY_DISABLED: "1", ...analytics };
+const analytics = await provisionAppAnalytics(app.folder, slug, domain);
+const { ANALYTICS_INGEST_TOKEN: ingestToken, ...analyticsPublicVars } = analytics.variables;
+const vars = { APPWRITE_ENDPOINT: config.endpoint, APPWRITE_PROJECT_ID: slug, APPWRITE_API_KEY: key, APP_URL: `https://${domain}`, PORT: String(app.port), NEXT_TELEMETRY_DISABLED: "1", ...analyticsPublicVars };
 await railway(["variables", "--service", "web", "--skip-deploys", ...Object.entries(vars).flatMap(([k, v]) => ["--set", `${k}=${v}`])]);
+if (ingestToken) {
+  await railway(["variable", "set", "--service", "web", "--skip-deploys", "--stdin", "ANALYTICS_INGEST_TOKEN"], ingestToken)
+    .catch(() => { throw new Error("Could not set the server-only analytics credential on Railway."); });
+}
+console.log(analytics.note);
 await railway(["up", join(app.folder), "--path-as-root", "--service", "web", "--detach"]);
 console.log("deploy started");

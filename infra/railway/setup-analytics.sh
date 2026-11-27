@@ -1,5 +1,5 @@
 #!/bin/bash
-# Initial installation only. Take a verified Appwrite backup first.
+# Take a verified backup of the database before changing it.
 set -euo pipefail
 cd "$(dirname "$0")"
 SERVICE=runport-prod
@@ -68,5 +68,43 @@ WHERE username = 'admin' AND role = 'admin'
 SQL
     } | psql_railway runport_analytics
     ;;
-  *) echo "usage: $0 database|admin" >&2; exit 64 ;;
+  provisioner)
+    site_id=${2:-}
+    [[ -z "$site_id" || "$site_id" =~ ^[a-f0-9]{8}(-[a-f0-9]{4}){3}-[a-f0-9]{12}$ ]] || exit 1
+    if ! get analytics-provisioner-password >/dev/null; then
+      security add-generic-password -s "$SERVICE" -a analytics-provisioner-password -w "$(openssl rand -hex 32)"
+    fi
+    hash=$(get analytics-provisioner-password | bun -e 'console.log(await Bun.password.hash((await Bun.stdin.text()).trim(), { algorithm: "bcrypt", cost: 12 }))')
+    {
+      printf '%s\n' "\set provisioner_hash '$hash'" "\set site_id '$site_id'"
+      cat <<'SQL'
+BEGIN;
+INSERT INTO "user" (user_id, username, password, role, updated_at)
+VALUES ('c03220f9-607a-4658-b3f6-25e88bd436de', 'runport-provisioner', :'provisioner_hash', 'user', now())
+ON CONFLICT (user_id) DO NOTHING;
+SELECT EXISTS (
+  SELECT FROM "user" WHERE user_id = 'c03220f9-607a-4658-b3f6-25e88bd436de'
+    AND username = 'runport-provisioner' AND role = 'user' AND deleted_at IS NULL
+) AS provisioner_ready \gset
+\if :provisioner_ready
+  -- Migrate at most the explicitly selected site from the bootstrap admin.
+  UPDATE website SET user_id = 'c03220f9-607a-4658-b3f6-25e88bd436de', updated_at = now()
+  WHERE website_id = NULLIF(:'site_id', '')::uuid
+    AND user_id = '41e2b680-648e-4b09-bcd7-3e2b10c06264' AND team_id IS NULL AND deleted_at IS NULL;
+  SELECT nullif(:'site_id', '') IS NULL OR EXISTS (
+    SELECT FROM website WHERE website_id = NULLIF(:'site_id', '')::uuid
+      AND user_id = 'c03220f9-607a-4658-b3f6-25e88bd436de' AND deleted_at IS NULL
+  ) AS site_ready \gset
+  \if :site_ready
+    COMMIT;
+  \else
+    DO $$ BEGIN RAISE EXCEPTION 'Analytics provisioner does not own the specified website'; END $$;
+  \endif
+\else
+  DO $$ BEGIN RAISE EXCEPTION 'Analytics provisioner identity conflicts with an existing user'; END $$;
+\endif
+SQL
+    } | psql_railway runport_analytics
+    ;;
+  *) echo "usage: $0 database|admin|provisioner [existing-runport-website-id]" >&2; exit 64 ;;
 esac

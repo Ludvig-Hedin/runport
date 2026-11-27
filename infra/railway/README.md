@@ -35,24 +35,45 @@ else the admin. The admin sleeps when idle; the router waits for it to wake.
 
 ## Visitor analytics
 
-The private `analytics` service runs Umami. It uses its own database and
+The `analytics` service runs Umami on a loopback listener behind the Runport
+gateway. Every public domain on the service reaches the gateway. It denies
+the original collector and accepts `/runport/ingest` POSTs only with a
+server-side credential matched to the event's website. It uses its own database and
 login on the existing PostgreSQL server. The nightly job saves a separate
 14-day dump under `backups/analytics-*.dump`. The five-minute monitor logs
 analytics health and backup freshness.
 
 For a first install, check `./apply.sh plan` and take a verified Appwrite
 backup. On the linked Runport project, run `./setup-analytics.sh database`
-before applying the configuration. Wait for the analytics deployment to be
-healthy while it is still private, then run `./setup-analytics.sh admin` to
-replace Umami's default password. Use an authenticated health check before
+before applying the configuration. Deploy `analytics` from `infra/railway/analytics`.
+Wait for it to be healthy while it is still private, then run
+`./setup-analytics.sh admin` and `./setup-analytics.sh provisioner`.
+For an existing Runport installation, pass an existing Runport website UUID
+to `provisioner` to transfer that site from the bootstrap admin. Verify the
+provisioner can see the site and the default admin password is rejected before
 adding `analytics.runport.app` through `mcp/src/custom-domain.ts`. Verify the
 DNS token and put the CNAME in place first. Umami's admin password lives in
 Keychain `runport-prod` / `analytics-admin-password`.
 
 Deploy the `ops` directory to `backup` and `monitor` to activate the new checks.
 The online Runport tools provision one analytics site per app. Other Runport
-installations can set `PLATFORM_ANALYTICS_URL` and store their Umami admin
-password in the configured Keychain service under `analytics-admin-password`.
+installations can set `PLATFORM_ANALYTICS_URL`, `PLATFORM_ANALYTICS_USERNAME`,
+`PLATFORM_ANALYTICS_PASSWORD`, and `PLATFORM_ANALYTICS_INGEST_SECRET` explicitly.
+Use a non-admin Umami account. The ingestion secret is the gateway's
+32-byte hex secret. Each app gets its own derived credential.
+
+### Upgrade an existing app
+
+Merge the starter's `app/visitor-analytics.tsx`, `app/runport-metrics/` and
+`lib/analytics*.ts` into the app. Preserve custom code while copying these
+files. Import `VisitorAnalytics` in the root `app/layout.tsx` and mount
+`<VisitorAnalytics />` inside the body. If the app has a site lock, keep its
+proxy in front of both metrics routes. Apply the starter's relative redirects
+in `app/unlock/submit/route.ts` if the app still uses absolute unlock redirects.
+
+Review the routes and custom events in `lib/analytics-policy.ts`, then redeploy
+with `mcp/src/deploy-app.ts`. The deployment detects a missing integration
+and reports that analytics was skipped.
 
 Put an app online: `PLATFORM_KEYCHAIN_SERVICE=runport-prod
 PLATFORM_APPWRITE_ENDPOINT=https://admin.runport.app/v1
