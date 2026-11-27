@@ -6,6 +6,17 @@ set -euo pipefail
 cd "$(dirname "$0")"
 SERVICE=runport-prod
 
+require_published_main() {
+  local commit main
+  commit=$(git rev-parse HEAD)
+  main=$(git ls-remote --exit-code origin refs/heads/main)
+  if [ "$commit" != "${main%%[[:space:]]*}" ] || ! git diff --quiet HEAD -- "$@"; then
+    echo "Use the published main commit with unmodified release tooling." >&2
+    exit 1
+  fi
+  printf '%s\n' "$commit"
+}
+
 deploy_main_source() (
   if [ "$#" -ne 1 ]; then
     echo "usage: $0 deploy-gateway|deploy-router|deploy-monitor|deploy-backup" >&2
@@ -18,12 +29,7 @@ deploy_main_source() (
     deploy-backup) service=backup; source_path=infra/railway/ops ;;
     *) exit 64 ;;
   esac
-  commit=$(git rev-parse HEAD)
-  main=$(git ls-remote --exit-code origin refs/heads/main)
-  if [ "$commit" != "${main%%[[:space:]]*}" ] || ! git diff --quiet HEAD -- apply.sh; then
-    echo "Deploy from an unmodified apply.sh at the published main commit." >&2
-    exit 1
-  fi
+  commit=$(require_published_main apply.sh)
   umask 077
   deploy_dir=$(mktemp -d)
   trap 'rm -r -- "$deploy_dir"' EXIT
@@ -73,11 +79,14 @@ fi
 
 case "${1:-plan}" in
   plan) railway config plan "${@:2}" ;;
-  apply|apply-analytics|apply-app-alerts)
+  apply|apply-analytics|apply-app-alerts|apply-mail-storage)
     if [ "$#" -gt 2 ] || { [ "$#" -eq 2 ] && [ "$2" != "--no-op" ]; }; then
       echo "usage: $0 $1 [--no-op]" >&2; exit 64
     fi
     git diff --quiet HEAD -- .railway || { echo "Commit the Railway configuration before applying it." >&2; exit 1; }
+    if [ "$1" = "apply-mail-storage" ]; then
+      require_published_main apply.sh check-git-plan.ts >/dev/null
+    fi
     if [ "$1" = "apply-app-alerts" ] && [ -z "$SD_APP_ALERT_RAILWAY_TOKEN" ]; then
       echo "App alerts need the app-alert-railway-token in the runport-prod Keychain." >&2; exit 1
     fi
@@ -91,6 +100,8 @@ case "${1:-plan}" in
       bun check-git-plan.ts "$plan_dir/plan.json" --analytics "${@:2}"
     elif [ "$1" = "apply-app-alerts" ]; then
       bun check-git-plan.ts "$plan_dir/plan.json" --app-alerts "${@:2}"
+    elif [ "$1" = "apply-mail-storage" ]; then
+      bun check-git-plan.ts "$plan_dir/plan.json" --mail-storage "${@:2}"
     else
       bun check-git-plan.ts "$plan_dir/plan.json" "${@:2}"
     fi
@@ -98,5 +109,5 @@ case "${1:-plan}" in
     ;;
   deploy-git) railway up git --path-as-root --service git --detach ;;
   deploy-analytics) railway up analytics --path-as-root --service analytics --detach ;;
-  *) echo "usage: $0 plan|apply|apply-analytics|apply-app-alerts|deploy-git|deploy-analytics|deploy-gateway|deploy-router|deploy-backup|deploy-monitor" >&2; exit 64 ;;
+  *) echo "usage: $0 plan|apply|apply-analytics|apply-app-alerts|apply-mail-storage|deploy-git|deploy-analytics|deploy-gateway|deploy-router|deploy-backup|deploy-monitor" >&2; exit 64 ;;
 esac

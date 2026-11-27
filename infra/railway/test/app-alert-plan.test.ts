@@ -13,6 +13,11 @@ test("the app alerts apply attaches only the existing detached gateway volume at
     before: null, after: { "mail-gateway-data": mount },
   };
   expect(() => assertAppAlertsPlan(plan([attachment]))).not.toThrow();
+  const production = { environmentId: "d95ac74a-26dc-4738-8765-3ab1389e057f" };
+  expect(() => assertAppAlertsPlan(plan([attachment], production), false, true)).not.toThrow();
+  expect(() => assertAppAlertsPlan(plan([attachment]), false, true)).toThrow();
+  const owner = variable("service.mail-gateway", "ALERT_TO", "ludvig@ludvighedin.com");
+  expect(() => assertAppAlertsPlan(plan([attachment, owner], production), false, true)).toThrow();
   for (const change of [
     { ...attachment, before: { "mail-gateway-data": mount } },
     { ...attachment, after: null },

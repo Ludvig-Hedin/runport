@@ -157,7 +157,9 @@ save it as `app-alert-railway-token` in the `runport-prod` Keychain. Use
 credentials and the gateway's owner address. The plan also allows the one-time
 attachment of the existing `mail-gateway-data` volume at `/data`. Back up the
 running gateway's SQLite data before attaching it. Back up any existing volume
-state before importing the live quota counts. The script derives the monitor
+state before importing the live quota counts. `./apply.sh apply-mail-storage`
+can perform the attachment on its own with a pinned plan limited to that
+change. The script derives the monitor
 key from the gateway master key. Use `./apply.sh deploy-gateway`,
 `./apply.sh deploy-router` and `./apply.sh deploy-monitor` for the source
 deployment.
