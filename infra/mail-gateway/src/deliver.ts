@@ -103,12 +103,17 @@ export function cloudflareDelivery(url: string, token: string): Deliver {
       throw new DeliveryError(`Cloudflare answered ${res.status} without a delivery receipt`,
         res.status >= 500 || res.status === 429 || res.status === 408, false);
     }
-    const result = await res.json().catch(() => null) as { sent?: number; codes?: unknown } | null;
+    const result = await res.json().catch(() => null) as { sent?: number; failed?: number; codes?: unknown } | null;
     const sent = result?.sent;
     if (typeof sent === "number" && Number.isInteger(sent) && sent > 0 && sent <= envelope.to.length) return sent;
 
+    // A refusal is definitive only when the receipt accounts for every
+    // recipient: nothing sent, every recipient failed, one known code each.
+    // Anything less complete is ambiguous and must not be resent.
     const codes = result?.codes;
-    if (sent === 0 && Array.isArray(codes) && codes.length && codes.every(isKnownWorkerRefusal)) {
+    const recipients = envelope.to.length;
+    if (sent === 0 && result?.failed === recipients && Array.isArray(codes) && codes.length === recipients &&
+        codes.every(isKnownWorkerRefusal)) {
       throw new DeliveryError(`Cloudflare refused the send: ${codes.join(", ")}`, codes.some(code => retryableWorkerRefusals.has(code)));
     }
     throw new DeliveryError("Cloudflare returned an unrecognized delivery receipt", true, false);

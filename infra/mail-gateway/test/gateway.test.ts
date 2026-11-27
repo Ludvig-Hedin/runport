@@ -332,6 +332,21 @@ describe("cloudflareDelivery", () => {
     }
   });
 
+  test("an incomplete zero-send receipt is ambiguous, never a definitive refusal", async () => {
+    for (const receipt of [
+      { sent: 0, failed: 0, codes: ["E_INTERNAL"] },
+      { sent: 0, failed: 1, codes: [] },
+      { sent: 0, codes: ["E_INTERNAL"] },
+      { sent: 0, failed: 2, codes: ["E_INTERNAL", "E_INTERNAL"] },
+    ]) {
+      const srv = Bun.serve({ port: 0, fetch: () => Response.json(receipt) });
+      const error = await cloudflareDelivery(`http://127.0.0.1:${srv.port}/`, "t")({ from: "a@a.com", to: ["b@b.com"] }, Buffer.from("x")).catch((e) => e);
+      expect(error).toBeInstanceOf(DeliveryError);
+      expect((error as DeliveryError).message).toContain("unrecognized delivery receipt");
+      srv.stop();
+    }
+  });
+
   test("marks outages as retryable and bad requests as permanent", async () => {
     for (const [status, retry] of [[503, true], [429, true], [400, false], [401, false]] as const) {
       const srv = Bun.serve({ port: 0, fetch: () => new Response("no", { status }) });
