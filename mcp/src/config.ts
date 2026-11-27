@@ -12,6 +12,8 @@ export const config = {
   logFile: join(repoRoot, "mcp", "logs", "actions.log"),
   /** macOS Keychain service that holds the Appwrite owner login. */
   keychainService: process.env.PLATFORM_KEYCHAIN_SERVICE ?? "builder-platform",
+  gitUrl: process.env.PLATFORM_GIT_URL ?? "https://git.runport.app",
+  gitKeychainService: process.env.PLATFORM_GIT_KEYCHAIN_SERVICE,
   /** Apps send as <slug>@<mailDomain> through the mail gateway (infra/mail-gateway). */
   mailDomain: process.env.PLATFORM_MAIL_DOMAIN ?? "runport.app",
   /** The gateway as Appwrite reaches it on its internal network. */

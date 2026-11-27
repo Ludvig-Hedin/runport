@@ -7,11 +7,12 @@ which software Runport runs on.
 
 Third-party software
 --------------------
-Runport does not include or redistribute the source code below. It starts
-these projects from their official, unmodified Docker images or installs them
-as npm packages, under their own licenses:
+Runport uses official container images or npm packages under the following
+licenses:
 
 - Appwrite server (https://github.com/appwrite/appwrite), BSD-3-Clause.
+- Forgejo (https://codeberg.org/forgejo/forgejo), GPL-3.0-or-later. The
+  Runport Git image uses the official Forgejo image and adds a backup helper.
 - Appwrite console image (appwrite/new), distributed by Appwrite with its
   self-hosted installer. Its source and license are not published.
   infra/appwrite/console-theme changes colours in a copy built on your own

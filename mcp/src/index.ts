@@ -3,6 +3,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
 import { createApp, deleteApp, listApps } from "./apps";
+import { parseGitHost } from "./git-host";
 import { logAction } from "./log";
 
 const server = new McpServer({ name: "runport", version: "0.1.0" });
@@ -28,22 +29,23 @@ server.registerTool(
     title: "Create app",
     description:
       "Creates a new app on the self-hosted platform: an Appwrite project (accounts, database, files), a Next.js starter " +
-      "with sign-up and login in ~/Programming/apps/<id>, its tables, and a private GitHub repo. Safe to call again with " +
+      "with sign-up and login in ~/Programming/apps/<id>, its tables, and a private Git repo on Runport or GitHub. Safe to call again with " +
       "the same name to resume after a failure. Afterwards, build features in the returned folder and read its CLAUDE.md.",
     inputSchema: {
       name: z.string().min(2).max(60).describe("Human name of the app, for example 'Todo list'."),
+      git: parseGitHost.describe("Git host for a new app. Defaults to runport. On retry, omit this to keep the existing host."),
       projectId: z.string().optional().describe("Only if told to: an Appwrite project that already exists."),
       apiKey: z.string().optional().describe("Only together with projectId: that project's server key."),
     },
   },
-  async ({ name, projectId, apiKey }) => handle("create_app", { name, projectId }, () => createApp({ name, projectId, apiKey })),
+  async ({ name, git, projectId, apiKey }) => handle("create_app", { name, git, projectId }, () => createApp({ name, git, projectId, apiKey })),
 );
 
 server.registerTool(
   "list_apps",
   {
     title: "List apps",
-    description: "Lists every app the platform created, with folder, local URL port, repo and Appwrite project id.",
+    description: "Lists every app the platform created, with folder, local URL port, Git host, repo and Appwrite project id.",
     annotations: { readOnlyHint: true },
   },
   async () => handle("list_apps", {}, listApps),
@@ -55,7 +57,7 @@ server.registerTool(
     title: "Delete app",
     description:
       "Permanently deletes an app's Appwrite project, including all its users and data. Ask the owner first. " +
-      "The local folder is removed only if all work is committed and pushed. The GitHub repo is never deleted.",
+      "The local folder is removed only if all work is committed and pushed. The private Git repo is kept on either host.",
     inputSchema: {
       id: z.string().describe("The app id from list_apps."),
       confirm: z.string().describe("Must equal the app id. Only pass it after the owner said yes."),

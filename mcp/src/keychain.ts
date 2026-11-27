@@ -1,8 +1,8 @@
 import { config } from "./config";
 
 /** Reads one secret from the macOS Keychain. Never logged or returned to the agent. */
-export async function readSecret(account: string, keychainService = config.keychainService): Promise<string> {
-  const proc = Bun.spawn(["security", "find-generic-password", "-s", keychainService, "-a", account, "-w"], {
+export async function readSecret(account: string, service = config.keychainService): Promise<string> {
+  const proc = Bun.spawn(["security", "find-generic-password", "-s", service, "-a", account, "-w"], {
     stdout: "pipe",
     stderr: "pipe",
   });
@@ -10,7 +10,7 @@ export async function readSecret(account: string, keychainService = config.keych
   if (code !== 0) {
     throw new Error(
       `Keychain item "${account}" is missing. Add it once with: ` +
-      `security add-generic-password -s ${keychainService} -a ${account} -w`,
+        `security add-generic-password -s ${service} -a ${account} -w`,
     );
   }
   return out.trim();

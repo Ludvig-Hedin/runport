@@ -1,5 +1,5 @@
 // Gives a Railway service its own address, for example todo.runport.app:
-// registers it on Railway, then creates the DNS records in Cloudflare.
+// Publishes a routing CNAME before registration, then applies Railway's exact records.
 // Run from anywhere:
 //   bun src/custom-domain.ts <domain> <service> <port> <railway-linked folder>
 // Needs a Cloudflare API token with "Edit zone DNS" for the zone, stored once:
@@ -9,7 +9,7 @@
 // at Let's Encrypt for an hour or more.
 // Safe to rerun: existing records with the right value are left alone.
 
-export {};
+import { Resolver } from "node:dns/promises";
 
 type DnsRecord = { type: "CNAME" | "TXT"; name: string; content: string };
 
@@ -48,17 +48,76 @@ const api = async <T>(path: string, init?: RequestInit): Promise<T> => {
 
 const [zone] = await api<{ id: string }[]>(`/zones?name=${zoneName}`);
 if (!zone) throw new Error(`Zone ${zoneName} is not reachable with the DNS token. Nothing was registered.`);
+const zoneId = zone.id;
 
-// 1. Railway: create the domain, or read it back when it already exists.
 type Wanted = { dnsRecords: { recordType: string; fqdn: string; requiredValue: string }[]; token?: string; dnsHost?: string };
+type RailwayDomain = { domain: string; type: "service" | "custom"; targetPort: number | null };
+type DomainStatus = { dnsRecords: Wanted["dnsRecords"]; verification?: { token: string; dnsHost: string } };
+
+async function domainStatus(name: string): Promise<DomainStatus> {
+  return JSON.parse(await railway(["domain", "status", name, "--service", service, "--json"])).domain;
+}
+
+const lookupDns = (r: Pick<DnsRecord, "type" | "name">) =>
+  api<{ id: string; content: string; proxied?: boolean }[]>(`/zones/${zoneId}/dns_records?type=${r.type}&name=${r.name}`);
+
+async function writeDns(r: DnsRecord, existingId?: string): Promise<void> {
+  const body = JSON.stringify({ ...r, ttl: 1, proxied: false });
+  if (existingId) await api(`/zones/${zoneId}/dns_records/${existingId}`, { method: "PUT", body });
+  else await api(`/zones/${zoneId}/dns_records`, { method: "POST", body });
+  console.log(`${existingId ? "updated" : "created"}  ${r.type} ${r.name}`);
+}
+
 async function railwayRecords(): Promise<Wanted> {
-  const status = await railway(["domain", "status", domain, "--service", service, "--json"]).then(
-    (out) => JSON.parse(out).domain as { dnsRecords: Wanted["dnsRecords"]; verification?: { token: string; dnsHost: string } },
-    () => null,
-  );
-  if (status) return { dnsRecords: status.dnsRecords, token: status.verification?.token, dnsHost: status.verification?.dnsHost };
-  const created = JSON.parse(await railway(["domain", domain, "--service", service, "--port", port, "--json"])).customDomainCreate.status;
-  return { dnsRecords: created.dnsRecords, token: created.verificationToken, dnsHost: created.verificationDnsHost };
+  const { domains } = JSON.parse(await railway(["domain", "list", "--service", service, "--json"])) as { domains: RailwayDomain[] };
+  if (domains.some((candidate) => candidate.domain === domain && candidate.type === "custom")) {
+    const status = await domainStatus(domain);
+    return { dnsRecords: status.dnsRecords, token: status.verification?.token, dnsHost: status.verification?.dnsHost };
+  }
+
+  // Railway returns the domain-specific target and verification TXT after
+  // registration. Before that, publish the service's own Railway CNAME.
+  const route = { type: "CNAME" as const, name: domain };
+  const [existing] = await lookupDns(route);
+  const serviceDomains = domains.filter((entry) => entry.type === "service");
+  const available = serviceDomains.find((entry) => entry.domain === existing?.content)
+    ?? serviceDomains.find((entry) => entry.targetPort === Number(port) || entry.targetPort === null)
+    ?? serviceDomains[0];
+  const custom = domains.find((entry) => entry.type === "custom");
+  // The initial DNS record can use any target already attached to this
+  // service. Railway sets the final routing target and port on registration.
+  const target = available?.domain ?? (custom
+    ? (await domainStatus(custom.domain)).dnsRecords.find((record) => record.recordType.endsWith("CNAME"))?.requiredValue
+    : (JSON.parse(await railway(
+      ["domain", "--service", service, "--port", port, "--json"],
+    )) as { domain?: string }).domain?.replace(/^https:\/\//, ""));
+  if (!target?.endsWith(".up.railway.app")) throw new Error("Railway did not supply a service domain. Nothing was registered.");
+  if (existing && (existing.content !== target || existing.proxied)) {
+    throw new Error(`DNS for ${domain} already points elsewhere. Nothing was registered.`);
+  }
+  if (!existing) await writeDns({ ...route, content: target });
+  // Query an external resolver so a local cached NXDOMAIN does not stall setup.
+  const resolver = new Resolver({ timeout: 2_000, tries: 1 });
+  resolver.setServers(["1.1.1.1", "8.8.8.8"]);
+  for (let attempt = 0; attempt < 20; attempt++) {
+    const published = await resolver.resolveCname(domain).catch(() => []);
+    if (published.some((name) => name.replace(/\.$/, "") === target) ||
+        (!published.length && await matchingAddresses(resolver, domain, target))) {
+      const created = JSON.parse(await railway(["domain", domain, "--service", service, "--port", port, "--json"])).customDomainCreate.status;
+      return { dnsRecords: created.dnsRecords, token: created.verificationToken, dnsHost: created.verificationDnsHost };
+    }
+    await Bun.sleep(3_000);
+  }
+  throw new Error(`The CNAME for ${domain} hasn't propagated yet. Nothing was registered. Retry when DNS resolves.`);
+}
+
+async function matchingAddresses(resolver: Resolver, name: string, target: string): Promise<boolean> {
+  // Cloudflare may flatten the verified CNAME at the apex or on the whole zone.
+  const [actual4, expected4, actual6, expected6] = await Promise.all([
+    resolver.resolve4(name).catch((): string[] => []), resolver.resolve4(target).catch((): string[] => []),
+    resolver.resolve6(name).catch((): string[] => []), resolver.resolve6(target).catch((): string[] => []),
+  ]);
+  return actual4.some((ip) => expected4.includes(ip)) || actual6.some((ip) => expected6.includes(ip));
 }
 const wanted = await railwayRecords();
 const records: DnsRecord[] = [
@@ -68,17 +127,14 @@ const records: DnsRecord[] = [
 
 // 2. Cloudflare: create or fix each record.
 for (const r of records) {
-  const existing = await api<{ id: string; content: string }[]>(`/zones/${zone.id}/dns_records?type=${r.type}&name=${r.name}`);
+  const existing = await lookupDns(r);
   const quoted = r.type === "TXT" ? `"${r.content}"` : r.content;
-  const same = existing.find((e) => e.content === r.content || e.content === quoted);
+  const same = existing.find((e) => !e.proxied && (e.content === r.content || e.content === quoted));
   if (same) {
     console.log(`ok       ${r.type} ${r.name}`);
     continue;
   }
   // Railway needs the record unproxied to issue its certificate.
-  const body = JSON.stringify({ type: r.type, name: r.name, content: r.content, ttl: 1, proxied: false });
-  if (existing[0]) await api(`/zones/${zone.id}/dns_records/${existing[0].id}`, { method: "PUT", body });
-  else await api(`/zones/${zone.id}/dns_records`, { method: "POST", body });
-  console.log(`${existing[0] ? "updated" : "created"}  ${r.type} ${r.name}`);
+  await writeDns(r, existing[0]?.id);
 }
 console.log(`DNS set. Railway issues the certificate for https://${domain} within a few minutes.`);

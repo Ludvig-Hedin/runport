@@ -15,6 +15,8 @@ bun run dev     # the port is in .env.local as PORT when the platform started it
 `.env.local` holds `APPWRITE_ENDPOINT`, `APPWRITE_PROJECT_ID` and
 `APPWRITE_API_KEY`. It is gitignored. Never commit it or print the key.
 
+The app's private Git remote is on Runport Git or GitHub, as chosen at setup.
+
 ## How it is built
 
 - **All Appwrite calls run on the server** (server components and server
