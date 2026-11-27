@@ -4,11 +4,11 @@ import type { Appearance } from "@/components/auth/appearance";
 // Change this file to restyle every auth screen at once. A single screen can
 // also take its own `appearance` prop, which is merged on top of this one.
 
-export const appName = "New app";
+export const appName = "Runport";
 
 export const routes = {
   /** Where people land after signing in or creating an account. */
-  afterSignIn: "/items",
+  afterSignIn: "/",
   /** Where people land after signing out. */
   afterSignOut: "/login",
 };
@@ -39,7 +39,7 @@ export const appearance: Appearance = {
     // fontFamily: "Inter, system-ui, sans-serif",
   },
   layout: {
-    // logoUrl: "/logo.svg",
+    logoUrl: "/mark.svg",
     socialButtonsPlacement: "top",
   },
   // Extra Tailwind classes per part, for example { card: "shadow-xl", primaryButton: "uppercase" }.

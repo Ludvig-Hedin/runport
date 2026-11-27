@@ -1,13 +1,14 @@
 {
-  "name": "app-template",
+  "name": "runport-dashboard",
   "private": true,
   "type": "module",
   "scripts": {
     "dev": "next dev",
     "build": "next build",
-    "start": "next start",
+    "start": "next start -p ${PORT:-3000}",
     "setup": "bun scripts/setup.ts",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "sync-apps": "bun scripts/sync-apps.ts"
   },
   "dependencies": {
     "next": "16.4.2",

@@ -11,7 +11,8 @@ import {
   savePendingLogin,
   takeCodeAttempt,
 } from "./login-code";
-import { allowed } from "./rate-limit";
+import { LIMITS, allowed, clientIp, take } from "./rate-limit";
+import { isOwnerEmail } from "./owner";
 import { setSessionCookie } from "./session";
 import { routes } from "@/runport.config";
 
@@ -25,6 +26,9 @@ const EXPIRED_CODE = "This code has expired. Send a new code.";
 async function sendCode(email: string): Promise<CodeState> {
   if (!isEmail(email)) return { step: "email", email, error: INVALID_EMAIL };
   if (!(await allowed("sendCode", email))) return { step: "email", email, error: TOO_MANY_ATTEMPTS };
+  // The dashboard only ever emails its owner: anyone else sees the no-access
+  // screen and no code is sent.
+  if (!isOwnerEmail(email)) redirect(`/no-access?email=${encodeURIComponent(email)}`);
   try {
     const { account } = createAdminClient();
     const token = await account.createEmailToken({ userId: ID.unique(), email });
@@ -51,6 +55,7 @@ async function verifyCode(input: string): Promise<CodeState> {
   if (!/^\d{6}$/.test(code)) return { ...state, error: "Enter the 6-digit code from the email." };
   if (Date.now() > pending.expire) return { ...state, error: EXPIRED_CODE };
   if (!takeCodeAttempt(pending.userId)) return { ...state, error: TOO_MANY_ATTEMPTS };
+  if (!take(`checkCode:ip:${await clientIp()}`, ...LIMITS.checkCode.ip)) return { ...state, error: TOO_MANY_ATTEMPTS };
   try {
     const { account } = createAdminClient();
     await setSessionCookie(await account.createSession({ userId: pending.userId, secret: code }));

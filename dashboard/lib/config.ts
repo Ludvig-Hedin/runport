@@ -9,15 +9,14 @@ const isOn = (name: string) => process.env[name] === "1";
 
 /** How people sign in. Email codes unless AUTH_MODE=password. */
 export function authMode(): AuthMode {
-  return process.env.AUTH_MODE === "password" ? "password" : "email-code";
+  // The dashboard always signs in with an email code, so only the owner's inbox can get in.
+  return "email-code";
 }
 
 /** Social sign-in buttons to show. The provider keys live in Appwrite. */
 export function oauthProviders(): OAuthProviderId[] {
-  const providers: OAuthProviderId[] = [];
-  if (isOn("AUTH_GOOGLE")) providers.push("google");
-  if (isOn("AUTH_GITHUB")) providers.push("github");
-  return providers;
+  // No social sign-in on the dashboard: only the owner's email code gets in.
+  return [];
 }
 
 /** This app's public address without a trailing slash. Appwrite links back here. */

@@ -1,7 +1,7 @@
 // Creates the database and tables from lib/schema.ts. Safe to run again.
-// Row security is on: each row is readable and writable only by its creator.
+// The tables and the backup bucket are private to the server key.
 
-import { AppwriteException, Client, Permission, Role, TablesDB } from "node-appwrite";
+import { AppwriteException, Client, Storage, TablesDB } from "node-appwrite";
 import { DATABASE_ID, TABLES, type ColumnSpec } from "../lib/schema";
 
 function env(name: string): string {
@@ -49,8 +49,9 @@ async function main(): Promise<void> {
       await tables.createTable({
         ...ids,
         name: table.name,
-        permissions: [Permission.create(Role.users())],
-        rowSecurity: true,
+        // Only the server reads and writes the dashboard's tables.
+        permissions: [],
+        rowSecurity: false,
       });
       console.log(`created table ${table.id}`);
     }
@@ -60,6 +61,13 @@ async function main(): Promise<void> {
         console.log(`created column ${table.id}.${column.key}`);
       }
     }
+  }
+  // Private bucket for the backup taken before an app is deleted. No one
+  // but the server key can read it.
+  const storage = new Storage(client);
+  if (!(await exists(() => storage.getBucket({ bucketId: "app-backups" })))) {
+    await storage.createBucket({ bucketId: "app-backups", name: "App backups", permissions: [], fileSecurity: false, encryption: true, antivirus: false });
+    console.log("created bucket app-backups");
   }
   console.log("setup done");
 }

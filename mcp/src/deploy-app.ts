@@ -53,6 +53,11 @@ const linked = await railway(["status", "--json"]).then(
   (out) => JSON.parse(out) as { name: string },
   () => null,
 );
+// A folder with no link of its own inherits a parent folder's link, which can
+// be any other project. Only the app's own project may be used.
+if (linked && linked.name !== `${slug}-app`) {
+  throw new Error(`${app.folder} is linked to the Railway project "${linked.name}", not "${slug}-app". Nothing was changed. Unlink it with \`railway unlink\` first.`);
+}
 if (!linked) await railway(["init", "--name", `${slug}-app`, "--json"]);
 const services = JSON.parse(await railway(["status", "--json"])).services.edges as { node: { name: string } }[];
 if (!services.some((s) => s.node.name === "web")) await railway(["add", "--service", "web"]);

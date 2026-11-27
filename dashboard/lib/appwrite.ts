@@ -31,6 +31,7 @@ function baseClient(): Client {
 export function createAdminClient() {
   const client = baseClient().setKey(config.apiKey());
   return {
+    client,
     account: new Account(client),
     tables: new TablesDB(client),
   };

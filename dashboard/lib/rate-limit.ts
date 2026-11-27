@@ -47,7 +47,7 @@ const MINUTE = 60 * 1000;
 /** Limits per sign-in step: [max, window] per email and per visitor address. */
 export const LIMITS = {
   sendCode: { email: [3, 10 * MINUTE], ip: [10, 60 * MINUTE] },
-  checkCode: { user: [5, 15 * MINUTE] },
+  checkCode: { user: [5, 15 * MINUTE], ip: [15, 60 * MINUTE] },
   signIn: { email: [10, 15 * MINUTE], ip: [30, 15 * MINUTE] },
   signUp: { ip: [10, 60 * MINUTE] },
   reset: { email: [3, 60 * MINUTE], ip: [10, 60 * MINUTE] },

@@ -1,23 +1,28 @@
-import type { Metadata } from "next";
-import { connection } from "next/server";
-import { indexingAllowed } from "@/lib/config";
+import type { Metadata, Viewport } from "next";
+import { Inter } from "next/font/google";
 import { ConsentProvider } from "@/components/consent/consent";
 import { appName } from "@/runport.config";
 import "./globals.css";
 
-export async function generateMetadata(): Promise<Metadata> {
-  // Read the env per request, so a build never bakes in the wrong answer.
-  await connection();
-  return {
-    title: appName,
-    robots: indexingAllowed() ? undefined : { index: false, follow: false },
-  };
-}
+const inter = Inter({ subsets: ["latin"], variable: "--font-inter" });
+
+// The dashboard is private: never indexed.
+export const metadata: Metadata = {
+  title: appName,
+  robots: { index: false, follow: false },
+};
+
+export const viewport: Viewport = {
+  themeColor: [
+    { media: "(prefers-color-scheme: light)", color: "#ffffff" },
+    { media: "(prefers-color-scheme: dark)", color: "#0e0e0e" },
+  ],
+};
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="en">
-      <body className="min-h-dvh bg-neutral-50 text-neutral-900 antialiased dark:bg-neutral-950 dark:text-neutral-100">
+    <html lang="en" className={inter.variable}>
+      <body>
         <ConsentProvider>{children}</ConsentProvider>
       </body>
     </html>
