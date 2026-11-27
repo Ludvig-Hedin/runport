@@ -18,9 +18,9 @@ async function ok(url: string): Promise<string | null> {
   }
 }
 
-async function backupFresh(): Promise<string | null> {
-  const listed = await bucket.list({ prefix: "backups/" });
-  const newest = (listed.contents ?? []).map((o) => Date.parse(String(o.lastModified))).sort().at(-1);
+async function backupFresh(kind: "appwrite" | "git"): Promise<string | null> {
+  const listed = await bucket.list({ prefix: `backups/${kind}-` });
+  const newest = (listed.contents ?? []).map((o) => Date.parse(String(o.lastModified))).sort((a, b) => a - b).at(-1);
   if (!newest) return "no backup found";
   const hours = (Date.now() - newest) / 3_600_000;
   return hours > 30 ? `newest backup is ${Math.round(hours)} hours old` : null;
@@ -29,8 +29,17 @@ async function backupFresh(): Promise<string | null> {
 const checks: Record<string, () => Promise<string | null>> = {
   "Appwrite API": () => ok("http://appwrite.railway.internal/v1/health/version"),
   "Mail gateway": () => ok("http://mail-gateway.railway.internal:8080/health"),
-  "Nightly backup": backupFresh,
+  "Nightly backup": () => backupFresh("appwrite"),
 };
+if (process.env.GIT_HEALTH_URL) {
+  checks["Nightly Git backup"] = () => backupFresh("git");
+  // The nightly snapshot briefly stops Forgejo while copying the volume.
+  const now = new Date();
+  if (now.getUTCHours() !== 1 || now.getUTCMinutes() >= 10) {
+    const url = process.env.GIT_HEALTH_URL;
+    checks["Runport Git"] = () => ok(url);
+  }
+}
 
 const stateFile = bucket.file(STATE_KEY);
 const state: State = (await stateFile.exists()) ? await stateFile.json() : {};

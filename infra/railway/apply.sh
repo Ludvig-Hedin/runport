@@ -29,9 +29,13 @@ export SD_SMTP_SYSTEM_PASSWORD=$(printf 'mail-gateway-system' | openssl dgst -sh
 export SD_CF_MAIL_TOKEN=$(get cloudflare-mail-token)
 export SD_PUBLIC_DOMAIN=$(get public-domain || true)
 if [ -z "$SD_PUBLIC_DOMAIN" ]; then echo "Set the router domain first: security add-generic-password -s $SERVICE -a public-domain -w <domain>" >&2; exit 1; fi
+export SD_GIT_BACKUP_TOKEN=$(ensure git-backup-token)
 
 case "${1:-plan}" in
   plan) railway config plan "${@:2}" ;;
   apply) railway config apply --yes "${@:2}" ;;
-  *) echo "usage: $0 plan|apply" >&2; exit 64 ;;
+  deploy-git) railway up git --path-as-root --service git --detach ;;
+  deploy-backup) railway up ops --path-as-root --service backup --detach ;;
+  deploy-monitor) railway up ops --path-as-root --service monitor --detach ;;
+  *) echo "usage: $0 plan|apply|deploy-git|deploy-backup|deploy-monitor" >&2; exit 64 ;;
 esac

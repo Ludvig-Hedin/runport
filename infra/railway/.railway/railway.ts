@@ -128,6 +128,33 @@ export default defineRailway(() => {
     healthcheck: "/health",
   });
 
+  const gitData = volume("git-data", { region: REGION_ID, sizeMB: 2000 });
+  const git = service("git", {
+    // Built from the pinned official Forgejo image in ../git/Dockerfile.
+    // Keep Git available for the first HTTPS request and the five-minute probe.
+    replicas: REGION,
+    healthcheck: "/api/healthz",
+    volumeMounts: { "git-data": { mountPath: "/data" } },
+    env: {
+      PORT: "3000",
+      GIT_BACKUP_TOKEN: secret("SD_GIT_BACKUP_TOKEN"),
+      APP_NAME: "Runport Git",
+      GITEA__server__DOMAIN: "git.runport.app",
+      GITEA__server__ROOT_URL: "https://git.runport.app/",
+      GITEA__server__HTTP_ADDR: "::",
+      GITEA__server__HTTP_PORT: "3000",
+      GITEA__server__DISABLE_SSH: "true",
+      GITEA__database__DB_TYPE: "sqlite3",
+      GITEA__database__PATH: "/data/gitea/forgejo.db",
+      GITEA__security__INSTALL_LOCK: "true",
+      GITEA__service__DISABLE_REGISTRATION: "true",
+      GITEA__service__REQUIRE_SIGNIN_VIEW: "true",
+      GITEA__repository__FORCE_PRIVATE: "true",
+      GITEA__actions__ENABLED: "false",
+      GITEA__cron_0X2E_update_checker__ENABLED: "false",
+    },
+  });
+
   // Scheduled jobs from infra/railway/ops (deployed with `railway up`).
   const opsEnv = {
     S3_ACCESS_KEY_ID: ref(files, "ACCESS_KEY_ID"),
@@ -150,13 +177,15 @@ export default defineRailway(() => {
       PGPASSWORD: secret("SD_DB_PASS"),
       PGDATABASE: "appwrite",
       KEEP_DAYS: "14",
+      GIT_BACKUP_URL: "http://git.railway.internal:8081/backup",
+      GIT_BACKUP_TOKEN: secret("SD_GIT_BACKUP_TOKEN"),
     },
   });
   const monitor = service("monitor", {
     replicas: REGION,
     start: "bun monitor.ts",
     deploy: { cronSchedule: "*/5 * * * *", restartPolicyType: "NEVER" },
-    env: { ...opsEnv, ALERT_EVERY_HOURS: "3" },
+    env: { ...opsEnv, ALERT_EVERY_HOURS: "3", GIT_HEALTH_URL: "https://git.runport.app/api/healthz" },
   });
 
   return project("runport", {
@@ -179,6 +208,8 @@ export default defineRailway(() => {
       gatewayData,
       mailGateway,
       router,
+      gitData,
+      git,
       backup,
       monitor,
     ],

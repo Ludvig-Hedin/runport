@@ -4,7 +4,9 @@ import { AppwriteAdmin, AppwriteError } from "./appwrite-admin";
 import { config } from "./config";
 import { readSecret } from "./keychain";
 import { run, succeeds } from "./exec";
-import { createPrivateRepo } from "./github";
+import { createPrivateRepo as createGitHubRepo } from "./github";
+import { createRunportRepo } from "./runport-git";
+import { selectGitHost, type GitHost } from "./git-host";
 import { type AppRecord, loadRegistry, nextFreePort, removeApp, upsertApp } from "./registry";
 import { assertAppwriteId, toSlug } from "./slug";
 
@@ -17,6 +19,7 @@ const SKIP_IN_TEMPLATE = new Set(["node_modules", ".next", "next-env.d.ts", "tsc
 
 export type CreateAppInput = {
   name: string;
+  git?: GitHost;
   /** Only when Appwrite cannot create projects itself: an existing project id and server key. */
   projectId?: string;
   apiKey?: string;
@@ -113,6 +116,7 @@ export async function createApp(input: CreateAppInput): Promise<CreateAppResult>
 
   const registry = await loadRegistry();
   const known = registry.apps.find((a) => a.slug === slug);
+  const git = selectGitHost(input.git, known?.git);
   const port = known?.port ?? nextFreePort(registry.apps);
   const folder = known?.folder ?? join(config.appsDir, slug);
   const projectId = assertAppwriteId(input.projectId ?? known?.projectId ?? slug);
@@ -159,14 +163,6 @@ export async function createApp(input: CreateAppInput): Promise<CreateAppResult>
   await run(["bun", "run", "setup"], folder);
   steps.push("installed packages and created tables");
 
-  let repoUrl = known?.repoUrl ?? null;
-  try {
-    repoUrl = await createPrivateRepo(folder, slug);
-    steps.push(`private repo ${repoUrl}`);
-  } catch (error) {
-    steps.push(`GitHub repo not created: ${(error as Error).message}. Rerun create_app to retry.`);
-  }
-
   const record: AppRecord = {
     slug,
     name: input.name,
@@ -174,10 +170,21 @@ export async function createApp(input: CreateAppInput): Promise<CreateAppResult>
     createdByPlatform,
     folder,
     port,
-    repoUrl,
+    repoUrl: known?.repoUrl ?? null,
+    git,
     createdAt: known?.createdAt ?? new Date().toISOString(),
   };
+  // Save the host choice before creating its remote, including across a process restart.
   await upsertApp(record);
+
+  const hostLabel = git === "runport" ? "Runport" : "GitHub";
+  try {
+    record.repoUrl = await (git === "runport" ? createRunportRepo(folder, slug) : createGitHubRepo(folder, slug));
+    steps.push(`private ${hostLabel} repo ${record.repoUrl}`);
+  } catch (error) {
+    steps.push(`${hostLabel} repo setup failed: ${(error as Error).message}. Rerun create_app to retry.`);
+  }
+  if (record.repoUrl !== (known?.repoUrl ?? null)) await upsertApp(record);
 
   return {
     ...record,
@@ -193,7 +200,7 @@ export async function listApps(): Promise<AppRecord[]> {
 
 export type DeleteResult = { slug: string; projectDeleted: boolean; folderDeleted: boolean; notes: string[] };
 
-/** Deletes the Appwrite project (users and data). The GitHub repo is never touched. */
+/** Deletes the Appwrite project (users and data) and preserves the Git repository. */
 export async function deleteApp(slug: string, confirm: string): Promise<DeleteResult> {
   if (confirm !== slug) throw new Error(`To delete, pass confirm equal to the app id "${slug}".`);
   const app = (await loadRegistry()).apps.find((a) => a.slug === slug);
@@ -224,7 +231,7 @@ export async function deleteApp(slug: string, confirm: string): Promise<DeleteRe
       notes.push(`Kept ${app.folder}: it has uncommitted or unpushed work.`);
     }
   }
-  if (app.repoUrl) notes.push(`The GitHub repo ${app.repoUrl} was kept.`);
+  if (app.repoUrl) notes.push(`The ${app.git === "runport" ? "Runport" : "GitHub"} repo ${app.repoUrl} was kept.`);
 
   await removeApp(slug);
   return { slug, projectDeleted, folderDeleted, notes };
