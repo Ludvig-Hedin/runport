@@ -35,6 +35,66 @@ else the admin. The admin sleeps when idle; the router waits for it to wake.
 - The encryption key (`openssl-key`) makes stored data readable. Losing it
   loses the data. Back it up outside this Mac.
 
+## Visitor analytics
+
+The `analytics` service runs Umami on a loopback listener behind the Runport
+gateway. Every public domain on the service reaches the gateway. It denies
+the original collector and accepts `/runport/ingest` POSTs only with a
+server-side credential matched to the event's website. It uses its own database and
+login on the existing PostgreSQL server. The nightly job saves a separate
+14-day dump under `backups/analytics-*.dump`. The five-minute monitor logs
+analytics health and backup freshness.
+
+To add analytics for the first time, start with a linked Runport project
+whose PostgreSQL, backup, monitor, and other base services are already in
+place. Analytics uses the existing PostgreSQL volume. Run `./apply.sh plan`
+and check that it only creates `analytics` and sets the analytics variables
+on the shared jobs. Take a verified Appwrite backup and run
+`./setup-analytics.sh database`, then use `./apply.sh apply-analytics` and
+`./apply.sh deploy-analytics`.
+Wait for it to be healthy while it is still private, then run
+`./setup-analytics.sh admin` and `./setup-analytics.sh provisioner`.
+For an existing Runport installation, pass an existing Runport website UUID
+to `provisioner` to transfer that site from the bootstrap admin. Verify the
+provisioner can see the site and the default admin password is rejected before
+adding `analytics.runport.app` through `mcp/src/custom-domain.ts`. Verify the
+DNS token and put the CNAME in place first. Umami's admin password lives in
+Keychain `runport-prod` / `analytics-admin-password`.
+
+Deploy the `ops` directory to `backup` and `monitor` to activate the new checks.
+For the gateway cutover on an existing production install, inspect the plan,
+then use `./apply.sh apply-analytics`, `./apply.sh deploy-analytics`, and
+`./apply.sh deploy-monitor` in that order. The analytics apply rejects Git
+changes and accepts only the collector transition and analytics probe settings.
+The monitor checks `GET /runport/ingest`, including a database read, without
+recording an event. It logs analytics failures and stale backups. When the
+configured recipient is `ludvig@ludvighedin.com`, it emails him once per
+incident and once on recovery.
+
+To verify an analytics backup restore, use an uploaded dump from a staging
+fixture. Download it, verify its checksum, and pass it with the source counts
+to `ops/verify-analytics-restore.sh`. The check uses a fresh local PostgreSQL
+cluster reachable only through its temporary socket.
+
+The online Runport tools provision one analytics site per app. Other Runport
+installations can set `PLATFORM_ANALYTICS_URL`, `PLATFORM_ANALYTICS_USERNAME`,
+`PLATFORM_ANALYTICS_PASSWORD`, and `PLATFORM_ANALYTICS_INGEST_SECRET` explicitly.
+Use a non-admin Umami account. The ingestion secret is the gateway's
+32-byte hex secret. Each app gets its own derived credential.
+
+### Upgrade an existing app
+
+Merge the starter's `app/visitor-analytics.tsx`, `app/runport-metrics/` and
+`lib/analytics*.ts` into the app. Preserve custom code while copying these
+files. Import `VisitorAnalytics` in the root `app/layout.tsx` and mount
+`<VisitorAnalytics />` inside the body. If the app has a site lock, keep its
+proxy in front of both metrics routes. Apply the starter's relative redirects
+in `app/unlock/submit/route.ts` if the app still uses absolute unlock redirects.
+
+Review the routes and custom events in `lib/analytics-policy.ts`, then redeploy
+with `mcp/src/deploy-app.ts`. The deployment detects a missing integration
+and reports that analytics was skipped.
+
 Put an app online: `PLATFORM_KEYCHAIN_SERVICE=runport-prod
 PLATFORM_APPWRITE_ENDPOINT=https://admin.runport.app/v1
 bun mcp/src/deploy-app.ts <slug>`. Each app gets its own Railway project, so

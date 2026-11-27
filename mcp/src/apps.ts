@@ -11,6 +11,7 @@ import { createRunportRepo } from "./runport-git";
 import { selectGitHost, type GitHost } from "./git-host";
 import { type AppRecord, loadRegistry, nextFreePort, removeApp, upsertApp } from "./registry";
 import { assertAppwriteId, toSlug } from "./slug";
+import { provisionAppAnalytics } from "./analytics-integration";
 
 // Every step checks whether its result already exists, so calling create_app
 // again after a failure resumes where it stopped instead of duplicating.
@@ -177,6 +178,11 @@ async function provisionApp(input: CreateAppInput): Promise<CreateAppResult> {
     await writeEnv(envFile, env);
   }
   await writeMcpConfig(folder, env);
+  const analytics = await provisionAppAnalytics(folder, slug);
+  if (Object.entries(analytics.variables).some(([name, value]) => env[name] !== value)) {
+    await writeEnv(envFile, { ...env, ...analytics.variables });
+  }
+  steps.push(analytics.note);
 
   if (record.createdByPlatform) {
     await ensurePlatform(projectId, "localhost");
