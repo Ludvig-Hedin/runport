@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
-import { appendFileSync, copyFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { appendFileSync, copyFileSync, mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -15,7 +15,7 @@ test("deploy uploads only a published commit to the named production service", (
   };
   const deploy = (...args: string[]) => run("bash", "infra/railway/apply.sh", ...args);
   try {
-    for (const directory of ["bin", "infra/railway/ops", "infra/railway/router", "infra/mail-gateway", "infra/railway/mail-storage"]) {
+    for (const directory of ["bin", "infra/railway/ops", "infra/railway/router", "infra/railway/git", "infra/railway/analytics", "infra/mail-gateway", "infra/railway/mail-storage"]) {
       mkdirSync(join(cwd, directory), { recursive: true });
     }
     for (const file of ["apply.sh", "check-mail-storage.ts", "mail-storage-state.graphql"]) {
@@ -23,6 +23,8 @@ test("deploy uploads only a published commit to the named production service", (
     }
     writeFileSync(join(cwd, "infra/railway/ops/source.txt"), "committed-ops\n");
     writeFileSync(join(cwd, "infra/railway/router/source.txt"), "committed-router\n");
+    writeFileSync(join(cwd, "infra/railway/git/source.txt"), "committed-git\n");
+    writeFileSync(join(cwd, "infra/railway/analytics/source.txt"), "committed-analytics\n");
     writeFileSync(join(cwd, "infra/mail-gateway/source.txt"), "committed-gateway\n");
     writeFileSync(join(cwd, "infra/railway/mail-storage/source.txt"), "committed-maintenance\n");
     writeFileSync(join(cwd, "bin/gh"), `#!/bin/bash
@@ -73,6 +75,7 @@ printf '%s\\n' "${"$"}{@:3}"
     const quota = new Database(snapshot);
     quota.run("CREATE TABLE sent_by_kind (day TEXT, app TEXT, kind TEXT, recipients INTEGER)");
     quota.close();
+    utimesSync(snapshot, 1, 1);
     const bootstrap = deploy("bootstrap-gateway-storage", snapshot);
     expect(bootstrap.exitCode).toBe(0);
     expect(bootstrap.stdout.toString()).toContain(`Runport bootstrap mail-gateway ${published}`);
@@ -87,6 +90,8 @@ printf '%s\\n' "${"$"}{@:3}"
       ["deploy-gateway", "mail-gateway", "gateway"],
       ["prepare-gateway-storage", "mail-gateway", "maintenance"],
       ["deploy-router", "router", "router"],
+      ["deploy-git", "git", "git"],
+      ["deploy-analytics", "analytics", "analytics"],
       ["deploy-monitor", "monitor", "ops"],
       ["deploy-backup", "backup", "ops"],
     ]) {

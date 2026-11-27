@@ -23,7 +23,7 @@ require_published_main() {
 deploy_main_source() (
   if { [ "$1" = "bootstrap-gateway-storage" ] && [ "$#" -ne 2 ]; } ||
       { [ "$1" != "bootstrap-gateway-storage" ] && [ "$#" -ne 1 ]; }; then
-    echo "usage: $0 bootstrap-gateway-storage /absolute/path/to/cutover-snapshot.sqlite, or deploy-gateway|prepare-gateway-storage|deploy-router|deploy-monitor|deploy-backup" >&2
+    echo "usage: $0 bootstrap-gateway-storage /absolute/path/to/cutover-snapshot.sqlite, or deploy-gateway|prepare-gateway-storage|deploy-router|deploy-monitor|deploy-backup|deploy-git|deploy-analytics" >&2
     exit 64
   fi
   case "$1" in
@@ -31,6 +31,8 @@ deploy_main_source() (
     bootstrap-gateway-storage) service=mail-gateway; source_path=infra/mail-gateway ;;
     prepare-gateway-storage) service=mail-gateway; source_path=infra/railway/mail-storage ;;
     deploy-router) service=router; source_path=infra/railway/router ;;
+    deploy-git) service=git; source_path=infra/railway/git ;;
+    deploy-analytics) service=analytics; source_path=infra/railway/analytics ;;
     deploy-monitor) service=monitor; source_path=infra/railway/ops ;;
     deploy-backup) service=backup; source_path=infra/railway/ops ;;
     *) exit 64 ;;
@@ -84,7 +86,7 @@ merge_gateway_quota() (
 )
 
 case "${1:-plan}" in
-  deploy-gateway|bootstrap-gateway-storage|prepare-gateway-storage|deploy-router|deploy-monitor|deploy-backup) deploy_main_source "$@"; exit ;;
+  deploy-gateway|bootstrap-gateway-storage|prepare-gateway-storage|deploy-router|deploy-monitor|deploy-backup|deploy-git|deploy-analytics) deploy_main_source "$@"; exit ;;
   merge-gateway-quota) merge_gateway_quota "$@"; exit ;;
 esac
 
@@ -156,7 +158,5 @@ case "${1:-plan}" in
     fi
     railway config apply --yes --plan "$plan_dir/plan.json"
     ;;
-  deploy-git) railway up git --path-as-root --service git --detach ;;
-  deploy-analytics) railway up analytics --path-as-root --service analytics --detach ;;
   *) echo "usage: $0 plan|apply|apply-analytics|apply-app-alerts|apply-mail-storage|bootstrap-gateway-storage|prepare-gateway-storage|merge-gateway-quota|deploy-git|deploy-analytics|deploy-gateway|deploy-router|deploy-backup|deploy-monitor" >&2; exit 64 ;;
 esac

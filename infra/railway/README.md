@@ -162,22 +162,22 @@ copied before attaching the disk.
 
 1. Use a private local directory for the snapshots. Copy
    `mail-storage/snapshot.ts` to a temporary path in the running gateway and
-   run it with Bun in an SSH session whose stdin stays open. It waits for
-   other SQLite writers, fences new writes, and emits one private JSON line
-   with the cutover snapshot, row count and checksum. Extract the SQLite copy,
-   validate its checksum and integrity, and keep the SSH session open. Stop the
-   old gateway deployment before releasing the fence or letting its 15-minute
-   watchdog expire. If the fence expires before the stop, take a new snapshot.
+   run it with Bun. It emits one private JSON line with the SQLite copy,
+   row count and checksum. Extract the copy and validate its checksum and
+   integrity before stopping the old deployment. The gateway can serve while
+   snapshots are taken. Quotas can start low during the short serving window
+   before the merge. The higher count for each key in the backed-up and live
+   databases is kept.
 2. With the old deployment stopped, run
    `./apply.sh bootstrap-gateway-storage /absolute/path/to/cutover-snapshot.sqlite`.
    Verify the gateway's health on the detached filesystem. The bootstrap image
    prepares file ownership at startup and then runs the gateway as `bun`.
-   Take a fresh fenced snapshot and stop the bootstrap deployment. Keep both
+   Take another snapshot and stop the bootstrap deployment. Keep both
    overlay snapshots. If the bootstrap received traffic, combine the two
    snapshots in a scratch database using `mergeQuotas` so the higher counter
    for each key goes into the final snapshot.
 3. Run `./apply.sh apply-mail-storage /absolute/path/to/cutover-snapshot.sqlite`
-   with the fresh snapshot. This production-only pinned plan attaches only
+   with the verified snapshot. This production-only pinned plan attaches only
    the existing `mail-gateway-data` volume at `/data`. It requires the
    stopped bootstrap from the same published main commit. Railway
    automatically redeploys that source with the attached volume. Check
@@ -202,6 +202,14 @@ If the mounted bootstrap exits, stop the failed deployment and use
 `./apply.sh prepare-gateway-storage` to get a maintenance container with no
 listeners. Inspect and back up the volume before fixing ownership or
 restoring quota state. Continue with the same guarded merge and deployment.
+
+If the quota merge fails, keep the overlay and volume backups, leave the
+gateway on the mounted bootstrap, and inspect the reported error. Correct
+the file transfer, checksums, ownership or SQLite input before retrying the
+same guarded merge. If the command was interrupted after publishing a
+complete backup, move that backup to private storage before retrying. Never
+remove the serving database to retry the merge. Continue once its SQLite
+integrity and both comparisons pass and the merge receipt exists.
 
 ## Runport Git
 

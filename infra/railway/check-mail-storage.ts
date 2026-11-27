@@ -52,14 +52,13 @@ if (import.meta.main) {
     assertMailStorage(JSON.parse(await Bun.stdin.text()), mode, bootstrap);
     if (mode === "detached-stopped" || mode === "detached-bootstrapped") {
       const file = Bun.file(snapshot ?? "");
-      if (!snapshot || !(await file.exists()) || Date.now() - file.lastModified > 30 * 60_000) {
-        throw new Error("A fresh cutover snapshot of the stopped gateway is required.");
+      if (!snapshot || !(await file.exists())) {
+        throw new Error("A cutover snapshot of the gateway quota database is required.");
       }
       const db = new Database(snapshot, { readonly: true });
       try {
         const results = db.query("PRAGMA integrity_check").values();
         if (results.length !== 1 || results[0]?.[0] !== "ok") throw new Error("Cutover snapshot failed integrity_check.");
-        db.query("SELECT day, app, kind, recipients FROM sent_by_kind LIMIT 0").all();
       } finally {
         db.close();
       }

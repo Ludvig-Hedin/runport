@@ -7,6 +7,6 @@ COPY src ./src
 COPY entrypoint.sh /app/entrypoint.sh
 USER root
 EXPOSE 2525 8080
-HEALTHCHECK --interval=10s --timeout=3s --retries=5 CMD wget -q -O - http://127.0.0.1:8080/health || exit 1
+HEALTHCHECK --interval=10s --timeout=3s --retries=5 CMD su-exec bun wget -q -O - http://127.0.0.1:8080/health || exit 1
 ENTRYPOINT ["sh", "/app/entrypoint.sh"]
 CMD ["bun", "src/index.ts"]
