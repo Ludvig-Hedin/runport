@@ -84,7 +84,7 @@ export async function SignedOut({ children }: { children: React.ReactNode }) {
   return (await getUser()) ? null : <>{children}</>;
 }
 
-/** The account page: name, password, signed-in devices and account deletion. Null when signed out. */
+/** The account page: name, password and signed-in devices. Null when signed out. */
 export async function UserProfile({ appearance }: WithAppearance) {
   const user = await getUser();
   if (!user) return null;

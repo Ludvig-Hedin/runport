@@ -82,7 +82,7 @@
   }
   .rp-switch:checked { background: var(--rp-primary); }
   .rp-switch:checked::after { transform: translateX(18px); }
-  .rp-switch:focus-visible { outline: 2px solid var(--rp-text); outline-offset: 2px; }
+  .rp-switch:focus-visible { outline: 2px solid var(--rp-text, currentColor); outline-offset: 2px; }
 
   .rp-consent-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; align-items: center; }
   .rp-consent-actions .rp-secondaryButton,

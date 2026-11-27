@@ -6,9 +6,14 @@ import { cookies } from "next/headers";
 // from the URL, so nobody can make the app show a message by sharing a link.
 
 const COOKIE = "rp_flash";
-const ALLOWED = new Set(["Your account and its data have been deleted."]);
+const MESSAGES = [
+  "Your account and its data have been deleted.",
+  "Your account is closed. Removing the rest of your data will finish shortly.",
+] as const;
+export type FlashMessage = (typeof MESSAGES)[number];
+const ALLOWED = new Set<string>(MESSAGES);
 
-export async function setFlash(message: string): Promise<void> {
+export async function setFlash(message: FlashMessage): Promise<void> {
   if (!ALLOWED.has(message)) throw new Error("Unknown flash message");
   (await cookies()).set(COOKIE, message, { path: "/", httpOnly: true, sameSite: "lax", maxAge: 60, secure: process.env.NODE_ENV === "production" });
 }
