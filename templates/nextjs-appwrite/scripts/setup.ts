@@ -1,8 +1,8 @@
 // Creates the database and tables from lib/schema.ts. Safe to run again.
 // Row security is on: each row is readable and writable only by its creator.
 
-import { AppwriteException, Client, Permission, Query, Role, TablesDB, TablesDBIndexType, Users } from "node-appwrite";
-import { DELETIONS_TABLE, finishPendingDeletions, soleOwner } from "../lib/ownership";
+import { AppwriteException, Client, Permission, Query, Role, TablesDB, TablesDBIndexType } from "node-appwrite";
+import { soleOwner } from "../lib/ownership";
 import { DATABASE_ID, OWNER_COLUMN, TABLES, type ColumnSpec } from "../lib/schema";
 
 function env(name: string): string {
@@ -114,20 +114,6 @@ async function main(): Promise<void> {
     if (table.personal) await ensureOwner(table.id);
   }
 
-  // Internal record of account deletions; only the server key can see it.
-  const deletions = { databaseId: DATABASE_ID, tableId: DELETIONS_TABLE };
-  if (!(await exists(() => tables.getTable(deletions)))) {
-    await tables.createTable({ ...deletions, name: "Account deletions", permissions: [], rowSecurity: false });
-    console.log(`created table ${DELETIONS_TABLE}`);
-  }
-  for (const key of ["userId", "userCreatedAt", "blockedAt"]) {
-    if (!(await exists(() => tables.getColumn({ ...deletions, key })))) {
-      await tables.createVarcharColumn({ ...deletions, key, size: 36, required: key === "userId" });
-      await waitForColumn(DELETIONS_TABLE, key);
-    }
-  }
-  const finished = await finishPendingDeletions(tables, new Users(client));
-  if (finished) console.log(`finished ${finished} earlier account deletions`);
   console.log("setup done");
 }
 

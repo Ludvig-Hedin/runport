@@ -12,8 +12,8 @@ export type TableSpec = {
   name: string;
   columns: ColumnSpec[];
   /**
-   * Each row belongs to one person. Setup adds an indexed `owner` column, and
-   * deleting an account removes exactly the rows whose owner is that person.
+   * Each row belongs to one person. Setup adds an indexed `owner` column
+   * (and fills it for older rows that clearly have one owner).
    * Set the owner on the server with `ownerData()` from lib/owner.ts.
    */
   personal?: boolean;

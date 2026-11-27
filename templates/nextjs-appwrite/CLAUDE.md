@@ -58,8 +58,6 @@ The app's private Git remote is on Runport Git or GitHub, as chosen at setup.
   one person. Setup adds an indexed `owner` column (and fills it for older
   rows that clearly have one owner). Set it on create with
   `...(await ownerData())` from `lib/owner.ts`, never from form input.
-  Deleting an account on `/account` removes exactly that person's rows in
-  every personal table; rows in other tables are kept.
 - Tables have row security on. A row created with the session client belongs
   to that user only. For shared data, pass explicit `permissions` to `createRow`.
 - `app/items` is the example feature. Replace or rename it freely.

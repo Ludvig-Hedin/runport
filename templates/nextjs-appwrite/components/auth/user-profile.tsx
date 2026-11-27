@@ -3,13 +3,13 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useActionState, useEffect, useRef, useState, useTransition } from "react";
-import { type AccountState, changePassword, deleteAccount, signOutDevices, updateName } from "@/lib/account";
+import { type AccountState, changePassword, signOutDevices, updateName } from "@/lib/account";
 import { type Appearance, resolveAppearance } from "./appearance";
 import { Message } from "./card";
 import { Field, PasswordField, Spinner, SubmitButton } from "./controls";
 
-// The account page, like Clerk's <UserProfile />: name, password, signed-in
-// devices and account deletion. Rendered by <UserProfile /> in index.tsx.
+// The account page, like Clerk's <UserProfile />: name, password and
+// signed-in devices. Rendered by <UserProfile /> in index.tsx.
 
 export type DeviceInfo = {
   id: string;
@@ -193,46 +193,6 @@ function Devices({ appearance, devices }: { appearance?: Appearance; devices: De
   );
 }
 
-function DeleteAccount({ appearance, email }: { appearance?: Appearance; email: string }) {
-  const [open, setOpen] = useState(false);
-  const [state, action] = useActionState(deleteAccount, {});
-  const [confirm, setConfirm] = useState("");
-  const opener = useRef<HTMLButtonElement>(null);
-  const returnFocus = useRef(false);
-  const { cls } = resolveAppearance(appearance);
-  useEffect(() => {
-    if (!open && returnFocus.current) {
-      opener.current?.focus();
-      returnFocus.current = false;
-    }
-  }, [open]);
-  if (!open) {
-    return (
-      <div className="rp-section-actions">
-        <button ref={opener} type="button" className={cls("secondaryButton", "rp-danger-button")} onClick={() => setOpen(true)}>
-          Delete account
-        </button>
-      </div>
-    );
-  }
-  return (
-    <form action={action} className={cls("form")}>
-      <Field appearance={appearance} label={`Type ${email} to confirm`} name="confirm" autoComplete="off" autoFocus
-        autoCapitalize="none" spellCheck={false} value={confirm} onChange={(e) => setConfirm(e.target.value)} />
-      <Message appearance={appearance} error={state.error} />
-      <div className="rp-section-actions">
-        <button type="button" className={cls("link")} onClick={() => { returnFocus.current = true; setOpen(false); setConfirm(""); }}>
-          Cancel
-        </button>
-        <SubmitButton appearance={appearance} className="rp-danger-solid"
-          ready={confirm.trim().toLowerCase() === email.toLowerCase()}>
-          Delete my account
-        </SubmitButton>
-      </div>
-    </form>
-  );
-}
-
 export function UserProfileView({ appearance, name, email, passwordMode, devices, backHref }: Props) {
   const { style, cls } = resolveAppearance(appearance);
   return (
@@ -256,11 +216,6 @@ export function UserProfileView({ appearance, name, email, passwordMode, devices
 
         <Section appearance={appearance} title="Devices" description="Where you are signed in right now.">
           <Devices key={devices?.map((d) => d.id).join() ?? "error"} appearance={appearance} devices={devices} />
-        </Section>
-
-        <Section appearance={appearance} title="Delete account" danger
-          description="Removes your account and everything you have saved in this app. This cannot be undone.">
-          <DeleteAccount appearance={appearance} email={email} />
         </Section>
       </div>
     </main>

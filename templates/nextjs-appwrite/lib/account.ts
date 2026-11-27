@@ -1,23 +1,14 @@
 "use server";
 
-import { cookies } from "next/headers";
-import { redirect } from "next/navigation";
-import { after } from "next/server";
 import { AppwriteException } from "node-appwrite";
-import { routes } from "@/runport.config";
-import { createAdminClient, createSessionClient, sessionCookieName } from "./appwrite";
+import { createSessionClient } from "./appwrite";
 import { TOO_MANY_ATTEMPTS, friendlyError } from "./auth-errors";
 import { authMode } from "./config";
 import { allowed } from "./rate-limit";
-import { type FlashMessage, setFlash } from "./flash";
-import { DELETIONS_TABLE, finishPendingDeletions, sweepOwnedRows, tombstone } from "./ownership";
-import { DATABASE_ID } from "./schema";
 import { getUser } from "./session";
 
 // What a signed-in person can do on their own account page. Every action acts
-// as that person through their session, except deleting the account, which
-// uses the server key and only removes rows held by that person alone (see
-// lib/ownership.ts).
+// as that person through their session, so Appwrite's own rules apply.
 
 export type AccountState = { error?: string; notice?: string; name?: string };
 
@@ -97,56 +88,4 @@ export async function signOutDevices(sessionId?: string): Promise<AccountState> 
     return { error: friendlyError(error, "Could not sign out that device.") };
   }
   return { notice: sessionId ? "Device signed out." : "Signed out everywhere else." };
-}
-
-/**
- * Deletes the person's account. One way only: once confirmed it is never reopened by code.
- *
- * 1. A record of the request is saved (account id + its creation time).
- * 2. The account is blocked. From here no session can read or write, and a
- *    second tab cannot start another deletion.
- * 3. Rows held by this person alone are deleted and the account becomes an
- *    anonymous placeholder (kept blocked, so its id is never reused).
- * 4. Half a minute later the same clean-up runs again in the background to
- *    catch anything a request already under way wrote late; `bun run setup`
- *    and every later deletion run it too, until the record can be closed.
- */
-export async function deleteAccount(_: AccountState, form: FormData): Promise<AccountState> {
-  const user = await getUser();
-  if (!user) return SIGNED_OUT;
-  if (!(await allowed("account", user.email))) return { error: TOO_MANY_ATTEMPTS };
-  if (String(form.get("confirm") ?? "").trim().toLowerCase() !== user.email.toLowerCase()) {
-    return { error: "Type your email address exactly to confirm." };
-  }
-  const { tables, users } = createAdminClient();
-
-  try {
-    await tables.upsertRow({
-      databaseId: DATABASE_ID,
-      tableId: DELETIONS_TABLE,
-      rowId: user.$id,
-      data: { userId: user.$id, userCreatedAt: user.$createdAt, blockedAt: new Date().toISOString() },
-    });
-    await users.updateStatus({ userId: user.$id, status: false });
-  } catch (error) {
-    console.error("could not start account deletion", error);
-    return { error: "Nothing was deleted. Try again in a moment." };
-  }
-
-  // The account is closed now. Whatever happens next, the clean-up finishes.
-  let message: FlashMessage = "Your account and its data have been deleted.";
-  try {
-    if ((await sweepOwnedRows(tables, user.$id)) > 0) throw new Error("rows left");
-    await tombstone(users, user.$id);
-  } catch (error) {
-    console.error("account closed, clean-up continues in the background", error);
-    message = "Your account is closed. Removing the rest of your data will finish shortly.";
-  }
-  after(async () => {
-    await new Promise((resolve) => setTimeout(resolve, 30_000));
-    await finishPendingDeletions(tables, users).catch((error) => console.error("deletion clean-up", error));
-  });
-  (await cookies()).delete(sessionCookieName());
-  await setFlash(message);
-  redirect(routes.afterSignOut);
 }
