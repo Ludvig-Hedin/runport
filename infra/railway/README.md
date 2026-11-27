@@ -9,9 +9,9 @@ else the admin. The admin sleeps when idle; the router waits for it to wake.
 - `./apply.sh plan` previews, `./apply.sh apply` applies. Secrets come from the
   Keychain service `runport-prod` and are generated once if missing. Never
   run `railway config apply` directly: the SD_* secrets would be missing.
-- `router`, `mail-gateway`, `backup` and `monitor` are built from this repo:
-  `railway up router --path-as-root --service router`, `../mail-gateway`
-  for the gateway, `ops` for both `backup` and `monitor`.
+- `./apply.sh deploy-router`, `deploy-gateway`, `deploy-backup` and
+  `deploy-monitor` upload the corresponding committed source from
+  published `main` to production.
 - Mail: the gateway posts to the `runport-mail` Worker
   (`infra/cloudflare-mail`, deploy with `bunx wrangler deploy`), which sends
   with Cloudflare Email Sending from runport.app (apps.ludvighedin.com still allowed). Transactional mail
@@ -148,15 +148,68 @@ RAILWAY_CLI_SCHEMA="$PWD/output/app-alerts-schema/railway-schema.json" bun test 
 ```
 
 The existing monitor runs app checks after its platform checks once both
-credentials are configured. For rollout, back up the gateway's SQLite
-database and compare cap counts after deployment. Deploy the updated
-gateway and router together before provisioning app reporting. Provision a
-dedicated token that can read the environments of deployed Runport apps, and
-save it as `app-alert-railway-token` in the `runport-prod` Keychain. Use
-`./apply.sh apply-app-alerts` to apply the pinned plan for the two monitor
-credentials and the gateway's owner address. The script derives the
-monitor key from the gateway master key. `./apply.sh deploy-monitor`
-publishes the monitor code.
+credentials are configured. Provision a dedicated token that can read the
+environments of deployed Runport apps and save it as `app-alert-railway-token`
+in the `runport-prod` Keychain. Use `./apply.sh apply-app-alerts` to apply the
+pinned plan for the two monitor credentials and the gateway's owner address.
+The script derives the monitor key from the gateway master key.
+
+### Gateway storage cutover
+
+Run the cutover from published main with a short mail maintenance window.
+Railway mounts volumes at runtime, so the existing overlay database must be
+copied before attaching the disk.
+
+1. Use a private local directory for the snapshots. Copy
+   `mail-storage/snapshot.ts` to a temporary path in the running gateway and
+   run it with Bun. It emits one private JSON line with the SQLite copy,
+   row count and checksum. Extract the copy and validate its checksum and
+   integrity before stopping the old deployment. The gateway can serve while
+   snapshots are taken. Quotas can start low during the short serving window
+   before the merge. The higher count for each key in the backed-up and live
+   databases is kept.
+2. With the old deployment stopped, run
+   `./apply.sh bootstrap-gateway-storage /absolute/path/to/cutover-snapshot.sqlite`.
+   Verify the gateway's health on the detached filesystem. The bootstrap image
+   prepares file ownership at startup and then runs the gateway as `bun`.
+   Take another snapshot and stop the bootstrap deployment. Keep both
+   overlay snapshots. If the bootstrap received traffic, combine the two
+   snapshots in a scratch database using `mergeQuotas` so the higher counter
+   for each key goes into the final snapshot.
+3. Run `./apply.sh apply-mail-storage /absolute/path/to/cutover-snapshot.sqlite`
+   with the verified snapshot. This production-only pinned plan attaches only
+   the existing `mail-gateway-data` volume at `/data`. It requires the
+   stopped bootstrap from the same published main commit. Railway
+   automatically redeploys that source with the attached volume. Check
+   health and inspect the mount and its database as `bun`. Export a private
+   backup of existing volume contents before the merge. Use SQLite snapshots
+   for databases that are open, and verify checksums and integrity.
+4. Copy the checked overlay snapshot and `mail-storage/merge.ts` to a private
+   directory on the gateway, named `/tmp/runport-quota-cutover` and owned by
+   `bun`. Save the snapshot as `overlay.sqlite` and the script as `merge.ts`.
+   Run `./apply.sh merge-gateway-quota /absolute/path/to/cutover-snapshot.sqlite`.
+   It checks the uploaded files' hashes, backs up the volume's quota database
+   as `volume-before.sqlite`, merges the higher count for each key, checks
+   integrity and counts, and writes the readiness receipt. Export the
+   destination snapshot. Check for zero missing keys from either input.
+5. Run `./apply.sh deploy-gateway` to start the gateway. This refuses to upload
+   unless the correct volume is attached and reachable with the readiness
+   receipt. Check `/health` and compare the post-start quota database against
+   the snapshots. Then use `./apply.sh deploy-router` and
+   `./apply.sh deploy-monitor` for the other source deployments.
+
+If the mounted bootstrap exits, stop the failed deployment and use
+`./apply.sh prepare-gateway-storage` to get a maintenance container with no
+listeners. Inspect and back up the volume before fixing ownership or
+restoring quota state. Continue with the same guarded merge and deployment.
+
+If the quota merge fails, keep the overlay and volume backups, leave the
+gateway on the mounted bootstrap, and inspect the reported error. Correct
+the file transfer, checksums, ownership or SQLite input before retrying the
+same guarded merge. If the command was interrupted after publishing a
+complete backup, move that backup to private storage before retrying. Never
+remove the serving database to retry the merge. Continue once its SQLite
+integrity and both comparisons pass and the merge receipt exists.
 
 ## Runport Git
 

@@ -65,22 +65,36 @@ export function assertAnalyticsPlan(plan: unknown, requireNoop = false): void {
   }
 }
 
-export function assertAppAlertsPlan(plan: unknown, requireNoop = false): void {
-  const { kind, version, destructive, claim, changeSet } = (plan ?? {}) as {
-    kind?: unknown; version?: unknown; destructive?: unknown; claim?: unknown; changeSet?: { changes?: unknown };
+export function assertAppAlertsPlan(plan: unknown, requireNoop = false, storageOnly = false): void {
+  const { kind, version, destructive, claim, changeSet, environmentId } = (plan ?? {}) as {
+    kind?: unknown; version?: unknown; destructive?: unknown; claim?: unknown;
+    changeSet?: { changes?: unknown }; environmentId?: unknown;
   };
   if (kind !== "railway.config.plan" || version !== 1 || destructive !== false ||
       (claim !== undefined && claim !== false) || !Array.isArray(changeSet?.changes)) {
     throw new Error("App alerts plan is destructive, claims resources, or uses an unrecognized format.");
   }
+  if (storageOnly && environmentId !== "d95ac74a-26dc-4738-8765-3ab1389e057f") {
+    throw new Error("Mail storage apply is pinned to the Runport production environment.");
+  }
+  if (storageOnly && changeSet.changes.length > 1) {
+    throw new Error("Mail storage apply allows only the gateway volume attachment.");
+  }
   if (requireNoop && changeSet.changes.length) throw new Error("Railway plan contains changes. No-op apply refused.");
   for (const change of changeSet.changes) {
-    const { kind, address, severity, path, variable, after } = change ?? {};
+    const { kind, address, severity, path, variable, field, before, after } = change ?? {};
+    const mount = after?.["mail-gateway-data"];
+    const attachesGatewayVolume = severity === "safe" && kind === "resource.update" &&
+      address === "service.mail-gateway" && field === "volumeAttachments" &&
+      path === "resources.service.mail-gateway.volumeAttachments" && before === null &&
+      Object.keys(after ?? {}).length === 1 && Object.keys(mount ?? {}).length === 2 &&
+      mount?.mountPath === "/data" && mount.volume === "volume.mail-gateway-data";
+    if (storageOnly && attachesGatewayVolume) continue;
     const value = after?.type === "literal" && typeof after.value === "string" ? after.value : "";
     const allowed = (address === "service.mail-gateway" && variable === "ALERT_TO" && value === "ludvig@ludvighedin.com") ||
       (address === "service.monitor" && variable === "RUNPORT_ALERT_MONITOR_KEY" && /^[a-f0-9]{64}$/.test(value)) ||
       (address === "service.monitor" && variable === "RAILWAY_MONITOR_TOKEN" && /^[A-Za-z0-9_.-]{16,2048}$/.test(value));
-    if (!allowed || severity !== "safe" || kind !== "variable.set" || path !== `resources.${address}.variables.${variable}`) {
+    if (storageOnly || !allowed || severity !== "safe" || kind !== "variable.set" || path !== `resources.${address}.variables.${variable}`) {
       throw new Error("Railway plan includes a change outside the app alerts allowlist.");
     }
   }
@@ -119,8 +133,12 @@ if (import.meta.main) {
     if (flags.includes("--analytics")) {
       // Apply the pinned change set and leave whole-project ownership alone.
       assertAnalyticsPlan({ ...plan, claim: plan.claim === true ? false : plan.claim }, flags.includes("--no-op"));
-    } else if (flags.includes("--app-alerts")) {
-      assertAppAlertsPlan({ ...plan, claim: plan.claim === true ? false : plan.claim }, flags.includes("--no-op"));
+    } else if (flags.includes("--app-alerts") || flags.includes("--mail-storage")) {
+      assertAppAlertsPlan(
+        { ...plan, claim: plan.claim === true ? false : plan.claim },
+        flags.includes("--no-op"),
+        flags.includes("--mail-storage"),
+      );
     } else {
       assertGitPlan(plan, flags.includes("--no-op"));
     }
