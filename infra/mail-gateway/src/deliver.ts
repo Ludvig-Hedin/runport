@@ -28,7 +28,13 @@ export function sesDelivery(region: string): Deliver {
 export function smtpDelivery(host: string, port: number): Deliver {
   const transport = nodemailer.createTransport({ host, port, secure: false, ignoreTLS: true });
   return async (envelope, raw) => {
-    await transport.sendMail({ envelope, raw });
+    try {
+      await transport.sendMail({ envelope, raw });
+    } catch (error) {
+      const code = (error as { responseCode?: number })?.responseCode;
+      if (code && code >= 400 && code < 600) throw new DeliveryError(`SMTP refused with ${code}`, code < 500);
+      throw error;
+    }
     return envelope.to.length;
   };
 }
@@ -38,6 +44,7 @@ export class DeliveryError extends Error {
     message: string,
     /** False when retrying cannot help, for example a refused recipient. */
     readonly retry: boolean,
+    readonly definite = true,
   ) {
     super(message);
   }
@@ -49,6 +56,7 @@ export function cloudflareDelivery(url: string, token: string): Deliver {
   return async (envelope, raw) => {
     const res = await fetch(url, {
       method: "POST",
+      signal: AbortSignal.timeout(8000),
       headers: {
         Authorization: `Bearer ${token}`,
         "X-Mail-From": envelope.from,
@@ -59,9 +67,10 @@ export function cloudflareDelivery(url: string, token: string): Deliver {
       body: new Uint8Array(raw),
     });
     // Status only in errors: the body could echo addresses.
-    if (!res.ok) throw new DeliveryError(`Cloudflare answered ${res.status}`, res.status >= 500 || res.status === 429);
+    if (!res.ok) throw new DeliveryError(`Cloudflare answered ${res.status}`, res.status >= 500 || res.status === 429, res.status < 500);
     const result = (await res.json()) as { sent: number; failed: number; codes: string[] };
     if (result.sent > 0) return result.sent;
-    throw new DeliveryError(`Cloudflare refused: ${result.codes.join(", ")}`, result.codes.some((c) => RETRYABLE.test(c)));
+    const uncertain = result.codes.some((code) => /INTERNAL|DELIVERY_FAILED|UNKNOWN/.test(code));
+    throw new DeliveryError(`Cloudflare refused: ${result.codes.join(", ")}`, result.codes.some((c) => RETRYABLE.test(c)), !uncertain);
   };
 }

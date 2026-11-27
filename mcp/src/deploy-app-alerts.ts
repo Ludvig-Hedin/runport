@@ -1,6 +1,7 @@
 import { createHmac } from "node:crypto";
 import { config } from "./config";
 import { readSecret } from "./keychain";
+import type { AppRecord } from "./registry";
 
 export type RailwayProject = {
   id: string;
@@ -15,27 +16,39 @@ export function webService(project: RailwayProject) {
   return { projectId: project.id, environmentId, serviceId };
 }
 
-export async function registerAppAlerts(slug: string, project: RailwayProject, domain: string) {
-  const origin = process.env.PLATFORM_ALERT_ORIGIN ?? "https://admin.runport.app";
+async function setup(origin: string, keychainService: string) {
   const target = new URL(origin);
   // Never send the registration credential to an implicit alternate origin.
   // Local development can explicitly override it with its own gateway key.
-  if (target.origin !== "https://admin.runport.app" && config.keychainService === "runport-prod") {
+  if (target.origin !== "https://admin.runport.app" && keychainService === "runport-prod") {
     throw new Error("An alternate app-alert gateway requires a separate keychain service.");
   }
-  const master = await readSecret("mail-master-key");
+  const master = await readSecret("mail-master-key", keychainService);
   const key = (purpose: string) => createHmac("sha256", master).update(`runport-app-alerts:${purpose}`).digest("hex");
-  const endpoint = new URL(`/_runport/alerts/register/${slug}`, target);
-  const response = await fetch(endpoint, {
-    method: "POST",
-    headers: { Authorization: `Bearer ${key("register")}`, "Content-Type": "application/json" },
-    body: JSON.stringify({ slug, ...webService(project), domain }),
-    redirect: "error",
-    signal: AbortSignal.timeout(5000),
-  });
-  if (!response.ok) throw new Error(`App alert registration failed (${response.status}).`);
+  async function update(slug: string, method: "POST" | "DELETE", data: object) {
+    const response = await fetch(new URL(`/_runport/alerts/register/${slug}`, target), {
+      method, headers: { Authorization: `Bearer ${key("register")}`, "Content-Type": "application/json" },
+      body: JSON.stringify(data), redirect: "error", signal: AbortSignal.timeout(5000),
+    });
+    if (!response.ok) throw new Error(`App alert registry update failed (${response.status}).`);
+  }
+  return { target, key, update };
+}
+
+export async function registerAppAlerts(slug: string, project: RailwayProject, domain: string) {
+  const keychainService = config.keychainService;
+  const { target, key, update } = await setup(process.env.PLATFORM_ALERT_ORIGIN ?? "https://admin.runport.app", keychainService);
+  const service = webService(project);
+  await update(slug, "POST", { slug, ...service, domain });
   return {
+    registration: { origin: target.origin, keychainService, environmentId: service.environmentId, serviceId: service.serviceId },
     RUNPORT_ERROR_URL: new URL(`/_runport/alerts/report/${slug}`, target).href,
-    RUNPORT_ERROR_TOKEN: key(`report:${slug}`),
+    RUNPORT_ERROR_TOKEN: key(`report:${slug}:${service.serviceId}:${service.environmentId}`),
   };
+}
+
+export async function retireAppAlerts(slug: string, alerts: NonNullable<AppRecord["alerts"]>) {
+  const { origin, keychainService, environmentId, serviceId } = alerts;
+  const { update } = await setup(origin, keychainService);
+  await update(slug, "DELETE", { environmentId, serviceId });
 }

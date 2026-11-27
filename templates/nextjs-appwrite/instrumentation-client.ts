@@ -6,10 +6,12 @@ async function report(error: unknown, location?: string) {
   const known = error instanceof Error ? error : undefined;
   const event = await errorReport("browser", known?.name, known?.stack ?? location, "", window.location.origin);
   if (sent.has(event.fingerprint) || sent.size >= 5) return;
+  const grant = document.querySelector<HTMLMetaElement>('meta[name="runport-error-grant"]')?.content;
+  if (!grant) return;
   sent.add(event.fingerprint);
   await fetch("/api/runport/error", {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", "X-Runport-Error-Grant": grant },
     body: JSON.stringify(event),
     credentials: "same-origin",
     keepalive: true,

@@ -1,11 +1,11 @@
 import { Database } from "bun:sqlite";
 import { createHmac, timingSafeEqual } from "node:crypto";
-import type { Deliver } from "./deliver";
+import { DeliveryError, type Deliver } from "./deliver";
 import { stockholmDay, type Limits } from "./limits";
 
 const APP = /^[a-z][a-z0-9-]{1,35}$/;
 const UUID = /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/;
-const OWNER = "ludvig@ludvighedin.com";
+const OWNER_ADDRESS = /^[A-Za-z0-9_+%'-]+(?:\.[A-Za-z0-9_+%'-]+)*@(?:[A-Za-z0-9-]+\.)+[A-Za-z]{2,63}$/;
 const SENDER = "alerts@runport.app";
 const FINGERPRINT = /^[a-f0-9]{64}$/;
 const kinds = new Set(["Error", "TypeError", "ReferenceError", "SyntaxError", "RangeError", "URIError", "EvalError", "AggregateError"]);
@@ -22,17 +22,28 @@ const downReasons: Record<string, string> = {
   removed: "Railway har ingen aktiv driftsättning för appen.",
   http: "Appens webbadress svarar med ett serverfel.",
   unreachable: "Appens webbadress gick inte att nå.",
+  exited: "Railway rapporterar att appens process har avslutats.",
 };
+const hour = 60 * 60_000;
+const dayMs = 24 * hour;
 const key = (master: string, purpose: string) => createHmac("sha256", master).update(`runport-app-alerts:${purpose}`).digest("hex");
-export const reportKey = (master: string, slug: string) => key(master, `report:${slug}`);
+export const reportKey = (master: string, slug: string, serviceId: string, environmentId: string) =>
+  key(master, `report:${slug}:${serviceId}:${environmentId}`);
 export const registrationKey = (master: string) => key(master, "register");
 export const monitorKey = (master: string) => key(master, "monitor");
 
-type Deployment = { slug: string; projectId: string; environmentId: string; serviceId: string; domain: string; incident: number | null };
+type Registration = { slug: string; projectId: string; environmentId: string; serviceId: string; domain: string };
+type Deployment = Registration & { incident: number | null; lastIncident: number | null };
 type Report = { source: string; kind: string; fingerprint: string };
-type Observation = { slug: string; status: string; reason: string };
-type Alert = { id: string; slug: string; detail: string; happened: number; count: number; category: "error" | "down" | "up" };
-type Options = { path: string; master: string; limits: Limits; deliver: Deliver; log: (entry: Record<string, unknown>) => void };
+type Observation = { slug: string; serviceId: string; environmentId: string; status: string; reason: string };
+type Alert = {
+  id: string; slug: string; detail: string; happened: number; count: number; failures: number;
+  category: "error" | "digest" | "down" | "up";
+};
+type Options = {
+  path: string; master: string; owner?: string; limits: Limits; deliver: Deliver;
+  log: (entry: Record<string, unknown>) => void; clock?: () => number;
+};
 
 const status = (code: number) => new Response(null, { status: code });
 
@@ -62,7 +73,7 @@ async function boundedJson(request: Request, maxBytes: number): Promise<unknown>
 const record = (value: unknown): value is Record<string, unknown> =>
   !!value && typeof value === "object" && !Array.isArray(value);
 
-function registration(value: unknown, slug: string): Omit<Deployment, "incident"> | undefined {
+function registration(value: unknown, slug: string): Registration | undefined {
   if (!record(value) || value.slug !== slug) return;
   const { projectId, environmentId, serviceId, domain } = value;
   if (typeof projectId !== "string" || !UUID.test(projectId) ||
@@ -84,22 +95,30 @@ function errorReport(value: unknown): Report | undefined {
 function observation(value: unknown): value is Observation {
   if (!record(value)) return false;
   return typeof value.slug === "string" && APP.test(value.slug) &&
-    typeof value.status === "string" && ["down", "up", "sleeping", "unknown"].includes(value.status) &&
+    typeof value.serviceId === "string" && UUID.test(value.serviceId) &&
+    typeof value.environmentId === "string" && UUID.test(value.environmentId) &&
+    typeof value.status === "string" && ["down", "up", "sleeping", "unknown", "retired"].includes(value.status) &&
     typeof value.reason === "string" && (value.status !== "down" || Object.hasOwn(downReasons, value.reason));
 }
 
-export function createAppAlerts({ path, master, limits, deliver, log }: Options) {
+export function createAppAlerts({ path, master, owner, limits, deliver, log, clock = Date.now }: Options) {
+  if (!owner || !OWNER_ADDRESS.test(owner) || owner.length > 254) {
+    log({ kind: "app-alert", result: "disabled", reason: "ALERT_TO must be one mailbox address" });
+    return () => status(503);
+  }
+  const recipient = owner;
   const db = new Database(path, { create: true });
   db.run("PRAGMA journal_mode = WAL");
   db.run(`
     CREATE TABLE IF NOT EXISTS apps (
       slug TEXT PRIMARY KEY, projectId TEXT NOT NULL, environmentId TEXT NOT NULL, serviceId TEXT NOT NULL,
-      domain TEXT NOT NULL, incident INTEGER
+      domain TEXT NOT NULL, incident INTEGER, lastIncident INTEGER
     );
     CREATE TABLE IF NOT EXISTS alerts (
       id TEXT PRIMARY KEY, slug TEXT NOT NULL, category TEXT NOT NULL, detail TEXT NOT NULL,
       happened INTEGER NOT NULL, count INTEGER NOT NULL DEFAULT 1, state TEXT NOT NULL DEFAULT 'pending',
-      day TEXT NOT NULL, channel TEXT NOT NULL DEFAULT ''
+      day TEXT NOT NULL, channel TEXT NOT NULL DEFAULT '', due INTEGER NOT NULL DEFAULT 0,
+      failures INTEGER NOT NULL DEFAULT 0, parent TEXT
     );
     CREATE INDEX IF NOT EXISTS alerts_budget ON alerts(slug, channel, day);
     CREATE INDEX IF NOT EXISTS alerts_pending ON alerts(state, happened);
@@ -107,10 +126,34 @@ export function createAppAlerts({ path, master, limits, deliver, log }: Options)
       slug TEXT NOT NULL, channel TEXT NOT NULL, minute INTEGER NOT NULL, count INTEGER NOT NULL,
       PRIMARY KEY (slug, channel)
     );
+    CREATE TABLE IF NOT EXISTS monitor_cursor (
+      id INTEGER PRIMARY KEY CHECK (id = 1), cursor TEXT NOT NULL DEFAULT '', waitUntil INTEGER NOT NULL DEFAULT 0
+    );
+    INSERT OR IGNORE INTO monitor_cursor (id) VALUES (1);
   `);
+  // Preserve data if an earlier draft was run against a local store.
+  db.transaction(() => {
+    const names = (table: "alerts" | "apps") => new Set(
+      db.query<{ name: string }, []>(`PRAGMA table_info(${table})`).all().map((entry) => entry.name),
+    );
+    if (!names("apps").has("lastIncident")) db.run("ALTER TABLE apps ADD COLUMN lastIncident INTEGER");
+    const columns = names("alerts");
+    if (!columns.has("due")) {
+      db.run("ALTER TABLE alerts ADD COLUMN due INTEGER NOT NULL DEFAULT 0");
+      const old = db.query<{ id: string }, []>("SELECT id FROM alerts WHERE category = 'error'").all();
+      for (const { id } of old) db.query(`
+        UPDATE alerts SET id = ?, state = CASE WHEN channel = 'browser' THEN 'archived' ELSE state END WHERE id = ?
+      `).run(key(master, `fingerprint:${id}`), id);
+    }
+    if (!columns.has("failures")) db.run("ALTER TABLE alerts ADD COLUMN failures INTEGER NOT NULL DEFAULT 0");
+    if (!columns.has("parent")) db.run("ALTER TABLE alerts ADD COLUMN parent TEXT");
+    db.run("CREATE INDEX IF NOT EXISTS alerts_due ON alerts(state, due)");
+  })();
 
-  const report = db.transaction((slug: string, event: Report, now: number): number => {
-    if (!db.query("SELECT 1 FROM apps WHERE slug = ?").get(slug)) return 404;
+  const report = db.transaction((app: Registration, event: Report, now: number): number => {
+    const { slug, serviceId, environmentId } = app;
+    if (!db.query("SELECT 1 FROM apps WHERE slug = ? AND serviceId = ? AND environmentId = ?")
+      .get(slug, serviceId, environmentId)) return 404;
     const channel = event.source === "browser" ? "browser" : "server";
     const window = Math.floor(now / 60_000);
     const rate = db.query<{ count: number }, [string, string, number]>(`
@@ -121,11 +164,22 @@ export function createAppAlerts({ path, master, limits, deliver, log }: Options)
     `).get(slug, channel, window);
     if (!rate || rate.count > 120) return 429;
 
-    const id = [slug, event.source, event.kind, event.fingerprint].join(":");
+    const day = stockholmDay(new Date(now));
+    if (channel === "browser") {
+      // Anonymous reports have a daily summary. Neither the submitted
+      // fingerprint nor an individual anonymous event occupies the queue.
+      const id = key(master, `browser-digest:${slug}:${day}`);
+      db.query(`
+        INSERT INTO alerts (id, slug, category, detail, happened, day, channel)
+        VALUES (?, ?, 'digest', 'Fel i webbläsaren som rapporterats under dagen.', ?, ?, 'browser')
+        ON CONFLICT (id) DO UPDATE SET count = count + 1
+      `).run(id, slug, now, day);
+      return 204;
+    }
+    const id = key(master, `fingerprint:${slug}:${event.source}:${event.kind}:${event.fingerprint}`);
     const existing = db.query("UPDATE alerts SET count = count + 1 WHERE id = ?").run(id);
     if (existing.changes) return 204;
 
-    const day = stockholmDay(new Date(now));
     const budget = db.query<{ count: number }, [string, string, string]>(
       "SELECT COUNT(*) AS count FROM alerts WHERE slug = ? AND channel = ? AND day = ?",
     ).get(slug, channel, day);
@@ -135,76 +189,117 @@ export function createAppAlerts({ path, master, limits, deliver, log }: Options)
     return 204;
   });
 
+  const retire = db.transaction((slug: string) => {
+    db.query("DELETE FROM alerts WHERE slug = ?").run(slug);
+    db.query("DELETE FROM traffic WHERE slug = ?").run(slug);
+    db.query("DELETE FROM apps WHERE slug = ?").run(slug);
+  });
+
   const observe = db.transaction((observations: Observation[], now: number) => {
-    for (const { slug, status, reason } of observations) {
+    for (const { slug, serviceId, environmentId, status, reason } of observations) {
       const app = db.query<Deployment, [string]>("SELECT * FROM apps WHERE slug = ?").get(slug);
-      if (!app || status === "unknown") continue;
+      if (!app || app.serviceId !== serviceId || app.environmentId !== environmentId || status === "unknown") continue;
+      if (status === "retired") {
+        retire(slug);
+        continue;
+      }
       const day = stockholmDay(new Date(now));
-      if (status === "down" && app.incident === null) {
-        const id = crypto.randomUUID();
-        db.query("UPDATE apps SET incident = ? WHERE slug = ?").run(now, slug);
+      if (status === "down" && app.incident === null && (app.lastIncident === null || now - app.lastIncident >= hour)) {
+        const id = key(master, `incident:${slug}:${app.serviceId}:${now}`);
+        db.query("UPDATE apps SET incident = ?, lastIncident = ? WHERE slug = ?").run(now, now, slug);
         db.query("INSERT INTO alerts (id, slug, category, detail, happened, day) VALUES (?, ?, 'down', ?, ?, ?)")
           .run(id, slug, downReasons[reason], now, day);
-      } else if ((status === "up" || status === "sleeping") && app.incident !== null) {
+      } else if (status === "up" && app.incident !== null) {
         const minutes = Math.max(1, Math.ceil((now - app.incident) / 60_000));
         db.query("UPDATE apps SET incident = NULL WHERE slug = ?").run(slug);
-        db.query("INSERT INTO alerts (id, slug, category, detail, happened, day) VALUES (?, ?, 'up', ?, ?, ?)")
-          .run(crypto.randomUUID(), slug, `Appen svarar igen. Avbrottet varade cirka ${minutes} minuter.`, now, day);
+        const parent = key(master, `incident:${slug}:${app.serviceId}:${app.incident}`);
+        db.query("INSERT INTO alerts (id, slug, category, detail, happened, day, parent) VALUES (?, ?, 'up', ?, ?, ?, ?)")
+          .run(crypto.randomUUID(), slug, `Appen svarar igen. Avbrottet varade cirka ${minutes} minuter.`, now, day, parent);
       }
     }
   });
 
-  async function flush() {
-    const pending = db.query<Alert, []>(`
-      SELECT id, slug, detail, happened, count, category FROM alerts WHERE state = 'pending'
-      ORDER BY category = 'error', happened, rowid LIMIT 50
-    `).all();
-    const capped = new Set<string>();
-    for (const event of pending) {
-      if (capped.has(event.slug)) continue;
-      const app = db.query<Deployment, [string]>("SELECT * FROM apps WHERE slug = ?").get(event.slug);
-      if (!app) continue;
-      const now = new Date();
-      const reservation = limits.reserve(event.slug, "mail", 1, now);
+  async function deliverAlert(event: Alert & Registration) {
+      const now = new Date(clock());
+      const reservation = limits.reserve(event.slug, "alert", 1, now);
       if (!reservation.ok) {
-        capped.add(event.slug);
-        log({ app: app.slug, kind: "app-alert", result: "refused", reason: reservation.reason });
-        continue;
+        db.query("UPDATE alerts SET due = MAX(due, ?) WHERE slug = ? AND state = 'pending'")
+          .run(now.getTime() + hour, event.slug);
+        log({ app: event.slug, kind: "app-alert", result: "refused", reason: reservation.reason });
+        return;
       }
 
       // Claim before contacting the provider. A lost acknowledgement is
       // indistinguishable from delivery, so never automatically send it twice.
       const claim = db.query("UPDATE alerts SET state = 'attempted' WHERE id = ? AND state = 'pending'").run(event.id);
       if (!claim.changes) {
-        limits.release(event.slug, "mail", 1, now);
-        continue;
+        limits.release(event.slug, "alert", 1, now);
+        return;
       }
 
-      const title = { error: "Fel i appen", down: "Appen ligger nere", up: "Appen fungerar igen" }[event.category];
-      const subject = `Runport: ${app.slug} | ${title}`;
+      const title = { error: "Fel i appen", digest: "Daglig sammanfattning av webbläsarfel",
+        down: "Appen ligger nere", up: "Appen fungerar igen" }[event.category];
+      const subject = `Runport: ${event.slug} | ${title}`;
       const stamp = new Intl.DateTimeFormat("sv-SE", {
         dateStyle: "short", timeStyle: "medium", timeZone: "Europe/Stockholm",
       }).format(event.happened);
-      const logs = `https://railway.com/project/${app.projectId}/service/${app.serviceId}?environmentId=${app.environmentId}`;
+      const logs = `https://railway.com/project/${event.projectId}/service/${event.serviceId}?environmentId=${event.environmentId}`;
       const raw = Buffer.from([
-        `From: Runport <${SENDER}>`, `To: ${OWNER}`,
+        `From: Runport <${SENDER}>`, `To: ${recipient}`,
         `Subject: =?UTF-8?B?${Buffer.from(subject).toString("base64")}?=`,
         `Date: ${now.toUTCString()}`, `Message-ID: <${crypto.randomUUID()}@runport.app>`,
         "MIME-Version: 1.0", "Content-Type: text/plain; charset=utf-8", "Content-Transfer-Encoding: 8bit",
-        "", `App: ${app.slug}`, title, event.detail,
+        "", `App: ${event.slug}`, title, event.detail,
         `Tid: ${stamp} (Stockholm)`, `Antal: ${event.count}`, `Loggar: ${logs}`,
-        ...(event.category === "error" ? [`Fel-ID: ${event.id.split(":").at(-1)}`] : []), "",
+        ...(event.category === "error" ? [`Fel-ID: ${event.id}`] : []), "",
       ].join("\r\n"));
       try {
-        const delivered = await deliver({ from: SENDER, to: [OWNER] }, raw);
-        if (delivered !== 1) throw new Error("Delivery was refused");
+        const delivered = await deliver({ from: SENDER, to: [recipient] }, raw);
+        if (delivered !== 1) throw new DeliveryError("Delivery was refused", false);
         db.query("UPDATE alerts SET state = 'sent' WHERE id = ?").run(event.id);
-        log({ app: app.slug, kind: "app-alert", category: event.category, result: "sent", delivered });
-      } catch {
-        // The cap remains charged for an ambiguous delivery, since the owner
-        // could already have received the message.
-        log({ app: app.slug, kind: "app-alert", category: event.category, result: "delivery unconfirmed" });
+        log({ app: event.slug, kind: "app-alert", category: event.category, result: "sent", delivered });
+      } catch (error) {
+        if (!(error instanceof DeliveryError) || !error.definite) {
+          // The cap remains charged if the provider could have accepted it.
+          log({ app: event.slug, kind: "app-alert", category: event.category, result: "delivery unconfirmed" });
+          return;
+        }
+        limits.release(event.slug, "alert", 1, now);
+        if (error.retry && event.failures < 5) {
+          const backoff = 5 * 60_000 * 2 ** event.failures;
+          db.query("UPDATE alerts SET state = 'pending', due = ?, failures = failures + 1 WHERE id = ?")
+            .run(clock() + backoff, event.id);
+        } else {
+          db.query("UPDATE alerts SET state = 'refused' WHERE id = ?").run(event.id);
+        }
+        log({ app: event.slug, kind: "app-alert", category: event.category, result: "delivery refused" });
       }
+  }
+
+  let flushing: Promise<void> | undefined;
+  async function flush() {
+    const now = clock();
+    const today = stockholmDay(new Date(now));
+    const deadline = Date.now() + 35_000;
+    const eligible = db.query<Alert & Registration, [number, string, number]>(`
+      SELECT alerts.id, apps.slug, apps.projectId, apps.environmentId, apps.serviceId, apps.domain,
+        alerts.detail, alerts.happened, alerts.count, alerts.category, alerts.failures
+      FROM alerts JOIN apps USING (slug)
+      WHERE state = 'pending' AND due <= ? AND (category != 'digest' OR day < ?)
+        AND (parent IS NULL OR EXISTS (SELECT 1 FROM alerts AS incident WHERE incident.id = alerts.parent AND incident.state = 'sent'))
+      ORDER BY CASE category WHEN 'down' THEN 0 WHEN 'up' THEN 0 WHEN 'error' THEN 1 ELSE 2 END,
+        happened, alerts.rowid LIMIT ?
+    `);
+    for (let checked = 0; checked < 150 && Date.now() < deadline;) {
+      const pending = eligible.all(now, today, Math.min(50, 150 - checked));
+      if (!pending.length) break;
+      for (const event of pending) {
+        if (Date.now() >= deadline) return;
+        // An earlier row for a capped app may have deferred this one.
+        if (!db.query("SELECT 1 FROM alerts WHERE id = ? AND due <= ? AND state = 'pending'").get(event.id, now)) continue;
+        await deliverAlert(event);
+      }
+      checked += pending.length;
     }
   }
 
@@ -212,24 +307,54 @@ export function createAppAlerts({ path, master, limits, deliver, log }: Options)
     const path = new URL(request.url).pathname;
     if (path === "/internal/app-alerts") {
       if (!authenticated(request, monitorKey(master))) return status(401);
-      if (request.method === "GET") return Response.json(db.query(
-        "SELECT slug, projectId, environmentId, serviceId, domain FROM apps ORDER BY slug",
-      ).all());
+      const now = clock();
+      if (request.method === "GET") {
+        const cursor = db.query<{ cursor: string; waitUntil: number }, []>("SELECT cursor, waitUntil FROM monitor_cursor WHERE id = 1").get()!;
+        if (cursor.waitUntil > now) return Response.json({ apps: [] });
+        const page = db.query(`
+          SELECT slug, projectId, environmentId, serviceId, domain, incident FROM apps WHERE slug > ? ORDER BY slug LIMIT 20
+        `);
+        const next = page.all(cursor.cursor);
+        return Response.json({ apps: next.length ? next : page.all("") });
+      }
       if (request.method !== "POST") return status(405);
-      const input = await boundedJson(request, 256_000).catch(() => undefined);
-      if (!Array.isArray(input) || !input.every(observation)) return status(400);
-      observe(input, Date.now());
-      await flush();
+      const input = await boundedJson(request, 16_000).catch(() => undefined);
+      if (!record(input) || !Array.isArray(input.observations) || input.observations.length > 20
+        || !input.observations.every(observation)) return status(400);
+      const wait = input.retryAfterMs ?? 0;
+      if (typeof wait !== "number" || !Number.isSafeInteger(wait) || wait < 0 || wait > 30 * dayMs) return status(400);
+      observe(input.observations, now);
+      const last = input.observations.at(-1);
+      if (last) db.query("UPDATE monitor_cursor SET cursor = ? WHERE id = 1").run(last.slug);
+      if (wait) db.query("UPDATE monitor_cursor SET waitUntil = MAX(waitUntil, ?) WHERE id = 1").run(now + wait);
+      db.query(`
+        DELETE FROM alerts WHERE happened < ?
+          OR (category != 'error' AND happened < ?)
+          OR (state = 'pending' AND happened < ?)
+      `).run(now - 30 * dayMs, now - 14 * dayMs, now - 7 * dayMs);
+      db.query("DELETE FROM traffic WHERE minute < ?").run(Math.floor(now / 60_000) - 60);
+      if (!flushing) flushing = flush().finally(() => { flushing = undefined; });
+      await flushing;
       return status(204);
     }
 
     const match = path.match(/^\/_runport\/alerts\/(register|report)\/([a-z][a-z0-9-]{1,35})$/);
     if (!match) return status(404);
-    if (request.method !== "POST") return status(405);
     const [, action, slug] = match;
-    const expected = action === "register" ? registrationKey(master) : reportKey(master, slug);
+    const retiring = action === "register" && request.method === "DELETE";
+    if (request.method !== "POST" && !retiring) return status(405);
+    const reportingApp = action === "report" ? db.query<Deployment, [string]>("SELECT * FROM apps WHERE slug = ?").get(slug) : null;
+    if (action === "report" && !reportingApp) return status(404);
+    const expected = reportingApp ? reportKey(master, slug, reportingApp.serviceId, reportingApp.environmentId) : registrationKey(master);
     if (!authenticated(request, expected)) return status(401);
     const input = await boundedJson(request, 512).catch(() => undefined);
+    if (retiring) {
+      if (!record(input) || typeof input.serviceId !== "string" || !UUID.test(input.serviceId) ||
+        typeof input.environmentId !== "string" || !UUID.test(input.environmentId)) return status(400);
+      const existing = db.query<Deployment, [string]>("SELECT * FROM apps WHERE slug = ?").get(slug);
+      if (existing && existing.serviceId === input.serviceId && existing.environmentId === input.environmentId) retire(slug);
+      return status(204);
+    }
     if (action === "register") {
       const app = registration(input, slug);
       if (!app) return status(400);
@@ -237,11 +362,12 @@ export function createAppAlerts({ path, master, limits, deliver, log }: Options)
         INSERT INTO apps (slug, projectId, environmentId, serviceId, domain) VALUES (?, ?, ?, ?, ?)
         ON CONFLICT (slug) DO UPDATE SET projectId = excluded.projectId, environmentId = excluded.environmentId,
         serviceId = excluded.serviceId, domain = excluded.domain,
-        incident = CASE WHEN serviceId = excluded.serviceId AND environmentId = excluded.environmentId THEN incident ELSE NULL END
+        incident = CASE WHEN serviceId = excluded.serviceId AND environmentId = excluded.environmentId THEN incident ELSE NULL END,
+        lastIncident = CASE WHEN serviceId = excluded.serviceId AND environmentId = excluded.environmentId THEN lastIncident ELSE NULL END
       `).run(slug, app.projectId, app.environmentId, app.serviceId, app.domain);
       return status(204);
     }
     const event = errorReport(input);
-    return status(event ? report(slug, event, Date.now()) : 400);
+    return status(event && reportingApp ? report(reportingApp, event, clock()) : 400);
   };
 }

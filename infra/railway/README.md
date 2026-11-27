@@ -43,22 +43,32 @@ bun mcp/src/deploy-app.ts <slug>`. Each app gets its own Railway project, so
 The router forwards authenticated registration and error reports to the
 existing mail gateway. The gateway keeps counts and pending alerts in a
 separate SQLite file beside its daily-cap database on `/data`. It sends plain
-Swedish alerts to the owner's fixed address through the same delivery and
-daily caps as app mail. No extra service is needed.
+Swedish alerts to the single owner account set by `ALERT_TO` in the gateway.
+Without a valid address, app alerts are disabled and ordinary mail keeps
+working. Alerts have daily limits of four per app and 30 across Runport,
+within the gateway's total cap. By default, ten percent of the total cap is
+reserved for Appwrite account mail. No extra service is needed.
 
 `deploy-app` registers the Railway web service using the local app registry.
 New apps inherit server and browser reporting from the starter. Existing
 apps need the reporting files copied into their source and a new deploy to
-report code errors. Apps get separate budgets for server and browser errors,
-each with up to 120 reports per minute and five new fingerprints per
-Stockholm day. Repeated fingerprints increment the stored count. The
-browser sends up to five distinct fingerprints per page. Once the gateway
-attempts delivery, it avoids resending if the provider's reply is lost.
+report code errors. Redeploying also switches the app's Appwrite account
+mail to the separate login credential. Per app, the gateway allows 120
+reports per minute each for server and browser errors. It accepts up to five
+new server fingerprints per Stockholm day and counts repeats for 30 days.
+Browser reports require a signed page grant and are limited per visitor and
+app before forwarding. They feed one digest for the previous Stockholm day.
+The gateway retries confirmed temporary refusals with backoff and avoids
+resending when delivery is uncertain.
 
-The five-minute check uses Railway deployment status for apps with Serverless
-enabled, so the monitor never wakes them. It also checks the public service
-address of always-on apps. A Railway API error leaves the last known app state
-in place.
+The five-minute job rotates through up to 20 apps per run. It checks Railway
+deployment and instance state and probes each running app's public URL.
+A confirmed sleeper stays asleep unless an open incident needs a verified
+recovery. The probe allows a second attempt after a cold start. Outages
+can send one notice and its recovery per one-hour incident window. Deleting
+an app from the registry or confirming the service is gone in Railway retires
+its alerts. API errors preserve the last known state. A Railway rate limit
+pauses checks for the retry delay.
 
 **Rollout prerequisite.** Land the other shared Railway changes first.
 Wire `checkDeployedApps()` from `ops/app-alert-monitor.ts` into the existing
@@ -66,5 +76,7 @@ monitor after its platform checks, with `RUNPORT_ALERT_MONITOR_KEY` derived
 by `monitorKey()` from the gateway master key and a dedicated Railway monitor
 token in `RAILWAY_MONITOR_TOKEN`. The module can also be run directly with
 `bun app-alert-monitor.ts` using those variables. Deploy the updated gateway
-and router before provisioning app reporting. Back up the gateway's existing
-SQLite data before rollout and compare the cap counts afterward.
+and router before provisioning app reporting. Set the gateway's `ALERT_TO`
+to the same owner address configured in the platform monitor. Back up the
+gateway's existing SQLite data before rollout and compare the cap counts
+afterward.

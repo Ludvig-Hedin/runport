@@ -17,6 +17,7 @@ const deliver = pickDelivery();
 const appAlerts = createAppAlerts({
   path: config.dataFile === ":memory:" ? ":memory:" : `${config.dataFile}.app-alerts`,
   master: config.masterKey,
+  owner: process.env.ALERT_TO,
   limits,
   deliver,
   log: jsonLog,
@@ -29,10 +30,11 @@ smtp.listen(config.smtpPort, () => jsonLog({ result: "listening", smtpPort: conf
 // Caddy publishes only the two authenticated app-alert paths.
 Bun.serve({
   port: config.httpPort,
-  fetch(req) {
+  fetch(req, server) {
     const { pathname } = new URL(req.url);
     if (pathname === "/health") return new Response("ok");
     if (pathname === "/stats") return Response.json(limits.today());
+    if (pathname === "/internal/app-alerts") server.timeout(req, 60);
     return appAlerts(req);
   },
 });

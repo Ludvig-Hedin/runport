@@ -56,8 +56,9 @@ bun run dev     # the port is in .env.local as PORT when the platform started it
   to that user only. For shared data, pass explicit `permissions` to `createRow`.
 - `app/items` is the example feature. Replace or rename it freely.
 - **App error alerts** are enabled by `deploy-app`. Keep both instrumentation
-  files and the `/api/runport/error` route. Uncaught server render, route and
-  action errors and uncaught browser errors are grouped by code location.
+  files, the grant in the root layout and the `/api/runport/error` route.
+  Uncaught server render, route and action errors are grouped by code
+  location. Admitted browser errors are counted in a daily summary.
   Only fixed error labels and a fingerprint reach Runport. Error messages,
   request URLs, headers, cookies and form data stay out of reports. Handled
   failures you convert into a response are outside Next.js error instrumentation.

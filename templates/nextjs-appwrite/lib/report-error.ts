@@ -20,6 +20,6 @@ export async function sendErrorReport(report: Report): Promise<void> {
     signal: AbortSignal.timeout(1500),
   }).catch(() => null);
   if (response?.ok) {
-    console.log(JSON.stringify({ event: "runport-error-report", ...report }));
+    console.log(JSON.stringify({ event: "runport-error-report", source: report.source, kind: report.kind }));
   }
 }

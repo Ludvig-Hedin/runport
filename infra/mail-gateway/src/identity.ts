@@ -16,8 +16,11 @@ export const appPassword = (masterKey: string, app: string) =>
     .update(app === SYSTEM_SENDER ? "mail-gateway-system" : `mail-gateway:${app}`)
     .digest("hex");
 
-export function passwordMatches(masterKey: string, app: string, given: string): boolean {
-  const expected = Buffer.from(appPassword(masterKey, app));
+export const loginPassword = (masterKey: string, app: string) =>
+  createHmac("sha256", masterKey).update(`mail-gateway-login:${app}`).digest("hex");
+
+export function passwordMatches(masterKey: string, app: string, given: string, login = false): boolean {
+  const expected = Buffer.from(login ? loginPassword(masterKey, app) : appPassword(masterKey, app));
   const actual = Buffer.from(given);
   return expected.length === actual.length && timingSafeEqual(expected, actual);
 }

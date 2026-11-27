@@ -17,6 +17,13 @@ Every email the platform sends passes through here: Appwrite's account mails
   log in as `<app>:news`. Newsletters may fill at most
   `MAIL_NEWS_SHARE_PERCENT` (default 70) of the total, so they never use up
   the room login codes need. Over a cap the email is refused, not queued.
+- Appwrite account mail uses `<app>:login` with its own gateway credential.
+  It can use the reserved `MAIL_LOGIN_RESERVE` places, defaulting to ten
+  percent of the overall cap. This covers login, verification and recovery.
+- Platform app alerts go to the configured `ALERT_TO` mailbox. Their daily
+  budgets are `MAIL_ALERT_DAILY_LIMIT` (default 30) and
+  `MAIL_APP_ALERT_DAILY_LIMIT` (default four). They count against the
+  overall cap and cannot use the account-mail reserve.
 - `DELIVERY=smtp` forwards to the local test inbox (Mailpit,
   http://localhost:8025). `DELIVERY=ses` sends through Amazon SES over HTTPS,
   which also works where outgoing SMTP is blocked (Railway Hobby).

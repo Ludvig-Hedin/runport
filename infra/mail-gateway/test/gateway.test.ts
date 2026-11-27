@@ -3,13 +3,25 @@ import { createHmac } from "node:crypto";
 import nodemailer, { type SendMailOptions } from "nodemailer";
 import type { Config } from "../src/config";
 import { DeliveryError, cloudflareDelivery, type Envelope } from "../src/deliver";
-import { appPassword, headerFrom } from "../src/identity";
+import { appPassword, headerFrom, loginPassword } from "../src/identity";
 import { Limits, stockholmDay } from "../src/limits";
 import { createSmtpServer } from "../src/server";
 
 const caps = (total: number, perApp: number, perAppNews = 100, newsShare = 1) => ({ total, perApp, perAppNews, newsShare });
 
 describe("Limits", () => {
+  test("alert caps and login headroom are reserved in the shared quota", () => {
+    const limits = new Limits(":memory:", { ...caps(10, 10), alertPerApp: 2, alertTotal: 3, loginReserve: 3 });
+    expect(limits.reserve("one", "alert", 2).ok).toBe(true);
+    expect(limits.reserve("one", "alert", 1).ok).toBe(false);
+    expect(limits.reserve("two", "alert", 1).ok).toBe(true);
+    expect(limits.reserve("three", "alert", 1).ok).toBe(false);
+    expect(limits.reserve("one", "mail", 4).ok).toBe(true);
+    expect(limits.reserve("one", "news", 1).ok).toBe(false);
+    expect(limits.reserve("one", "mail", 1).ok).toBe(false);
+    expect(limits.reserve("one", "login", 3).ok).toBe(true);
+    expect(limits.today().total).toBe(10);
+  });
   test("counts recipients per app and in total", () => {
     const limits = new Limits(":memory:", caps(5, 3));
     expect(limits.reserve("a", "mail", 3).ok).toBe(true);
@@ -64,7 +76,7 @@ const config: Config = {
   smtpPort: PORT,
   httpPort: 0,
   dataFile: ":memory:",
-  caps: caps(4, 3, 2, 0.5),
+  caps: { ...caps(4, 3, 2, 0.5), loginReserve: 0, alertTotal: 30, alertPerApp: 4 },
   maxRecipients: 3,
   maxBytes: 20_000,
   senderDomains: ["apps.example.com"],
@@ -157,6 +169,12 @@ describe("headerFrom", () => {
 });
 
 describe("SMTP gateway", () => {
+  test("only the separate Appwrite credential can use an app's login budget", async () => {
+    const from = "shop@apps.example.com";
+    expect(await smtpCode(send("shop:login", ["alice@example.com"], { from }))).toBe(535);
+    await send("shop:login", ["alice@example.com"], { from }, loginPassword(config.masterKey, "shop"));
+    expect(limits.today().apps.shop).toEqual({ mail: 0, news: 0, login: 1 });
+  });
   beforeEach(() => {
     delivered = [];
     failNext = false;

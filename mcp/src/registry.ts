@@ -15,6 +15,7 @@ export type AppRecord = {
   port: number;
   repoUrl: string | null;
   createdAt: string;
+  alerts?: { origin: string; keychainService: string; environmentId: string; serviceId: string };
 };
 
 type Registry = { apps: AppRecord[] };

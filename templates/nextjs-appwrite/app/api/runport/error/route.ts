@@ -1,12 +1,15 @@
+import { browserFingerprint, createBrowserAdmission } from "@/lib/browser-admission";
 import { errorKinds } from "@/lib/error-shape";
 import { errorReportingEnabled, sendErrorReport } from "@/lib/report-error";
 
+const admit = createBrowserAdmission();
+
 export async function POST(request: Request) {
-  if (!errorReportingEnabled()) return new Response(null, { status: 204 });
-  if (request.headers.get("sec-fetch-site") !== "same-origin"
-    || request.headers.get("content-type") !== "application/json") {
-    return new Response(null, { status: 403 });
-  }
+  const key = process.env.RUNPORT_ERROR_TOKEN;
+  if (!key || !errorReportingEnabled()) return new Response(null, { status: 204 });
+  if (request.headers.get("content-type") !== "application/json") return new Response(null, { status: 415 });
+  const admission = admit(request, key, Boolean(process.env.RAILWAY_ENVIRONMENT_ID));
+  if (admission !== 204) return new Response(null, { status: admission });
 
   // The browser always sends a fixed-size JSON record. Bound the stream
   // independently of Content-Length, which a caller can omit.
@@ -31,7 +34,7 @@ export async function POST(request: Request) {
     if (!kind || typeof fingerprint !== "string" || !/^[a-f0-9]{64}$/.test(fingerprint)) {
       return new Response(null, { status: 400 });
     }
-    await sendErrorReport({ source: "browser", kind, fingerprint });
+    await sendErrorReport({ source: "browser", kind, fingerprint: browserFingerprint(key, fingerprint) });
     return new Response(null, { status: 204 });
   } catch {
     return new Response(null, { status: 400 });

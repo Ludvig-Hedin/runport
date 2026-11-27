@@ -8,7 +8,7 @@ import { AppwriteAdmin } from "./appwrite-admin";
 import { config } from "./config";
 import { registerAppAlerts, webService, type RailwayProject } from "./deploy-app-alerts";
 import { readSecret } from "./keychain";
-import { loadRegistry } from "./registry";
+import { loadRegistry, upsertApp } from "./registry";
 import { assertAppwriteId } from "./slug";
 
 const slug = assertAppwriteId(process.argv[2] ?? "");
@@ -63,14 +63,14 @@ console.log(`app address: https://${domain}`);
 // 2. Appwrite project on the online Runport.
 if (!(await admin.getProject(slug))) await admin.createProject(slug, app.name);
 await admin.addWebPlatform(slug, domain);
-const masterKey = await readSecret("mail-gateway-master-key");
+const masterKey = await readSecret("mail-master-key");
 await admin.setProjectSmtp(slug, {
   senderName: app.name,
   senderEmail: `${slug}@${config.mailDomain}`,
   host: "mail-gateway.railway.internal",
   port: 2525,
-  username: slug,
-  password: new Bun.CryptoHasher("sha256", masterKey).update(`mail-gateway:${slug}`).digest("hex"),
+  username: `${slug}:login`,
+  password: new Bun.CryptoHasher("sha256", masterKey).update(`mail-gateway-login:${slug}`).digest("hex"),
 });
 // Reuse the key already stored on Railway, so reruns do not pile up keys.
 const current = JSON.parse(await railway(["variables", "--service", "web", "--environment", "production", "--json"], undefined, true)) as Record<string, string>;
@@ -89,6 +89,7 @@ console.log("tables ready");
 // Telemetry off, so an idle app sends nothing out and Railway can put it to sleep.
 const vars = { APPWRITE_ENDPOINT: config.endpoint, APPWRITE_PROJECT_ID: slug, APPWRITE_API_KEY: key, APP_URL: `https://${domain}`, PORT: String(app.port), NEXT_TELEMETRY_DISABLED: "1" };
 const alertVars = await registerAppAlerts(slug, project, domain);
+await upsertApp({ ...app, alerts: alertVars.registration });
 const variableTarget = ["--service", "web", "--environment", "production", "--skip-deploys"];
 await railway(["variables", ...variableTarget, ...Object.entries({ ...vars, RUNPORT_ERROR_URL: alertVars.RUNPORT_ERROR_URL })
   .flatMap(([k, v]) => ["--set", `${k}=${v}`])], undefined, true);
