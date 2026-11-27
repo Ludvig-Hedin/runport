@@ -71,33 +71,38 @@ export async function sweepOwnedRows(tables: TablesDB, userId: string): Promise<
 export const tombstoneEmail = (userId: string) => `deleted-${userId}@deleted.invalid`;
 
 /**
- * Turns a blocked account into a permanent, anonymous placeholder: no email,
- * name, preferences, labels, linked Google/GitHub sign-ins or sessions. The
- * record itself is kept (blocked) so its id can never be given to someone
- * new. Safe to run again.
+ * Turns a closed (blocked) account into a permanent, anonymous placeholder:
+ * no sessions, linked sign-ins, email, phone, name, preferences or labels.
+ * The record itself stays blocked so its id is never given to anyone else.
+ * Every step checks first, so running it again picks up where it stopped.
  */
 export async function tombstone(users: Users, userId: string): Promise<void> {
   await users.deleteSessions({ userId });
-  const { identities } = await users.listIdentities({ queries: [Query.equal("userId", userId), Query.limit(100)] });
-  for (const identity of identities) await users.deleteIdentity({ identityId: identity.$id });
-  await users.updateEmail({ userId, email: tombstoneEmail(userId) });
-  await users.updateName({ userId, name: "" });
-  await users.updatePrefs({ userId, prefs: {} });
-  await users.updateLabels({ userId, labels: [] });
+  for (let page = 0; page < 100; page++) {
+    const { identities } = await users.listIdentities({ queries: [Query.equal("userId", userId), Query.limit(100)] });
+    if (identities.length === 0) break;
+    for (const identity of identities) await users.deleteIdentity({ identityId: identity.$id });
+  }
+  const user = await users.get({ userId });
+  if (user.email !== tombstoneEmail(userId)) await users.updateEmail({ userId, email: tombstoneEmail(userId) });
+  if (user.phone) await users.updatePhone({ userId, number: "" });
+  if (user.name) await users.updateName({ userId, name: "" });
+  if (Object.keys(user.prefs ?? {}).length) await users.updatePrefs({ userId, prefs: {} });
+  if (user.labels.length) await users.updateLabels({ userId, labels: [] });
+}
+
+/** True once nothing identifying is left on the account. */
+export async function isTombstoned(users: Users, userId: string): Promise<boolean> {
+  const user = await users.get({ userId });
+  return user.status === false && user.email === tombstoneEmail(userId) && !user.phone && !user.name && user.labels.length === 0;
 }
 
 /**
- * Recovery leaves a record alone until it is this old. A deletion request
- * finishes (or rolls back) long before that, so recovery can never act on an
- * account while its own request is still working on it, and late writes
- * from requests already under way have landed.
- */
-const GRACE_MS = 10 * 60_000;
-
-/**
- * Finishes account deletions that stopped part way. Only ever touches an
- * account that is blocked (a deletion in progress or done); a record whose
- * account is active again was rolled back and is just removed. Safe to run any time.
+ * Finishes closed accounts' deletions: sweeps their rows and anonymises them.
+ * A record is acted on only when its account is still blocked AND is the same
+ * account (same creation time) that asked to be deleted. Code never unblocks
+ * an account, so an active account is never touched; a record whose account
+ * is active again (unblocked by an admin) or different is simply dropped.
  */
 export async function finishPendingDeletions(tables: TablesDB, users: Users): Promise<number> {
   const { rows } = await tables.listRows({ databaseId: DATABASE_ID, tableId: DELETIONS_TABLE, queries: [Query.limit(PAGE)] });
@@ -105,34 +110,22 @@ export async function finishPendingDeletions(tables: TablesDB, users: Users): Pr
   for (const row of rows) {
     const record = row as unknown as Row;
     const userId = String(record.userId ?? "");
-    const close = () => tables.deleteRow({ databaseId: DATABASE_ID, tableId: DELETIONS_TABLE, rowId: row.$id });
-    const age = Date.now() - Date.parse(String(record.blockedAt ?? ""));
-    if (!(age > GRACE_MS)) continue; // too young (or unreadable): its request may still be running
+    const close = async () => {
+      await tables.deleteRow({ databaseId: DATABASE_ID, tableId: DELETIONS_TABLE, rowId: row.$id });
+      closed++;
+    };
     try {
       const user = await users.get({ userId }).catch((error) => {
         if (error instanceof AppwriteException && error.code === 404) return null;
         throw error;
       });
-      if (!user) {
-        // Never seen with this flow (accounts are kept as placeholders); without the
-        // account we cannot prove whose rows they are, so nothing is swept.
-        await close();
-        closed++;
-        continue;
-      }
-      if (user.status !== false) {
-        await close(); // rolled back: the account is in use again, touch nothing
-        closed++;
+      if (!user || user.$createdAt !== record.userCreatedAt || user.status !== false) {
+        await close(); // gone, a different account, or reopened by an admin: touch nothing
         continue;
       }
       const left = await sweepOwnedRows(tables, userId);
-      // Re-check right before removing who they were.
-      if ((await users.get({ userId })).status !== false) continue;
       await tombstone(users, userId);
-      if (left === 0) {
-        await close();
-        closed++;
-      }
+      if (left === 0 && (await sweepOwnedRows(tables, userId)) === 0 && (await isTombstoned(users, userId))) await close();
     } catch (error) {
       console.error(`could not finish deleting account ${userId}`, error);
     }

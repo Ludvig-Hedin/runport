@@ -8,7 +8,7 @@ import { cookies } from "next/headers";
 const COOKIE = "rp_flash";
 const MESSAGES = [
   "Your account and its data have been deleted.",
-  "Your data has been deleted. Removing your sign-in details will finish shortly.",
+  "Your account is closed. Removing the rest of your data will finish shortly.",
 ] as const;
 export type FlashMessage = (typeof MESSAGES)[number];
 const ALLOWED = new Set<string>(MESSAGES);

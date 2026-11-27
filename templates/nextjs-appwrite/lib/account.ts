@@ -2,6 +2,7 @@
 
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
+import { after } from "next/server";
 import { AppwriteException } from "node-appwrite";
 import { routes } from "@/runport.config";
 import { createAdminClient, createSessionClient, sessionCookieName } from "./appwrite";
@@ -99,18 +100,16 @@ export async function signOutDevices(sessionId?: string): Promise<AccountState> 
 }
 
 /**
- * Deletes the person's own rows in every personal table and removes them as a user.
+ * Deletes the person's account. One way only: once confirmed it is never reopened by code.
  *
- * 1. A record per account acts as a lock, so two clicks cannot race.
- * 2. The account is blocked: no session can write any more.
- * 3. Rows held by this person alone are deleted until none are left.
- * 4. The account becomes an anonymous, blocked placeholder: email, name,
- *    linked sign-ins and sessions are removed. It is kept so its id is never
- *    reused. The email address is free to sign up again.
- * 5. Rows a request already under way writes late are swept by the next
- *    deletion or `bun run setup`, which only ever touch blocked accounts.
- * If step 3 fails, the account is unblocked, the lock removed, and the
- * person can simply try again.
+ * 1. A record of the request is saved (account id + its creation time).
+ * 2. The account is blocked. From here no session can read or write, and a
+ *    second tab cannot start another deletion.
+ * 3. Rows held by this person alone are deleted and the account becomes an
+ *    anonymous placeholder (kept blocked, so its id is never reused).
+ * 4. Half a minute later the same clean-up runs again in the background to
+ *    catch anything a request already under way wrote late; `bun run setup`
+ *    and every later deletion run it too, until the record can be closed.
  */
 export async function deleteAccount(_: AccountState, form: FormData): Promise<AccountState> {
   const user = await getUser();
@@ -120,42 +119,33 @@ export async function deleteAccount(_: AccountState, form: FormData): Promise<Ac
     return { error: "Type your email address exactly to confirm." };
   }
   const { tables, users } = createAdminClient();
-  const lock = { databaseId: DATABASE_ID, tableId: DELETIONS_TABLE, rowId: user.$id };
-
-  await finishPendingDeletions(tables, users).catch(() => 0);
-  try {
-    await tables.createRow({ ...lock, data: { userId: user.$id, blockedAt: new Date().toISOString() } });
-  } catch (error) {
-    if (error instanceof AppwriteException && error.code === 409) {
-      return { error: "Your account is already being deleted. Reload the page in a moment." };
-    }
-    return { error: friendlyError(error, "Could not start deleting the account.") };
-  }
 
   try {
+    await tables.upsertRow({
+      databaseId: DATABASE_ID,
+      tableId: DELETIONS_TABLE,
+      rowId: user.$id,
+      data: { userId: user.$id, userCreatedAt: user.$createdAt, blockedAt: new Date().toISOString() },
+    });
     await users.updateStatus({ userId: user.$id, status: false });
-    let left = await sweepOwnedRows(tables, user.$id);
-    for (let retry = 0; left > 0 && retry < 2; retry++) left = await sweepOwnedRows(tables, user.$id);
-    if (left > 0) throw new Error(`${left} rows could not be removed`);
   } catch (error) {
-    console.error("account deletion stopped", error);
-    // Undo only if no clean-up run has already turned the account into a placeholder.
-    const current = await users.get({ userId: user.$id }).catch(() => null);
-    if (current && current.email === user.email) {
-      await users.updateStatus({ userId: user.$id, status: true }).catch(() => {});
-      await tables.deleteRow(lock).catch(() => {});
-    }
-    return { error: "Deleting stopped before it finished. Nothing else changed and your account still works. Try again." };
+    console.error("could not start account deletion", error);
+    return { error: "Nothing was deleted. Try again in a moment." };
   }
 
-  // Data is gone and nobody can sign in; now remove who they were.
+  // The account is closed now. Whatever happens next, the clean-up finishes.
   let message: FlashMessage = "Your account and its data have been deleted.";
   try {
+    if ((await sweepOwnedRows(tables, user.$id)) > 0) throw new Error("rows left");
     await tombstone(users, user.$id);
   } catch (error) {
-    console.error("data deleted, sign-in details not yet removed", error);
-    message = "Your data has been deleted. Removing your sign-in details will finish shortly.";
+    console.error("account closed, clean-up continues in the background", error);
+    message = "Your account is closed. Removing the rest of your data will finish shortly.";
   }
+  after(async () => {
+    await new Promise((resolve) => setTimeout(resolve, 30_000));
+    await finishPendingDeletions(tables, users).catch((error) => console.error("deletion clean-up", error));
+  });
   (await cookies()).delete(sessionCookieName());
   await setFlash(message);
   redirect(routes.afterSignOut);

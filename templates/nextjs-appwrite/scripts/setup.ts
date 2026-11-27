@@ -120,7 +120,7 @@ async function main(): Promise<void> {
     await tables.createTable({ ...deletions, name: "Account deletions", permissions: [], rowSecurity: false });
     console.log(`created table ${DELETIONS_TABLE}`);
   }
-  for (const key of ["userId", "blockedAt"]) {
+  for (const key of ["userId", "userCreatedAt", "blockedAt"]) {
     if (!(await exists(() => tables.getColumn({ ...deletions, key })))) {
       await tables.createVarcharColumn({ ...deletions, key, size: 36, required: key === "userId" });
       await waitForColumn(DELETIONS_TABLE, key);
