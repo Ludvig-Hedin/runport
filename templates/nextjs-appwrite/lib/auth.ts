@@ -3,7 +3,7 @@
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 import { AppwriteException, ID } from "node-appwrite";
-import { createAdminClient, createSessionClient, sessionCookieName } from "./appwrite";
+import { createAdminClient, createAuthClient, createSessionClient, sessionCookieName } from "./appwrite";
 import { INVALID_EMAIL, TOO_MANY_ATTEMPTS, friendlyError, isEmail } from "./auth-errors";
 import { allowed } from "./rate-limit";
 import { appUrl, authMode } from "./config";
@@ -17,7 +17,7 @@ export type FormState = { error?: string; notice?: string };
 const PASSWORD_OFF: FormState = { error: "Sign-in with a password is turned off." };
 
 async function startSession(email: string, password: string): Promise<void> {
-  const { account } = createAdminClient();
+  const { account } = await createAuthClient();
   await setSessionCookie(await account.createEmailPasswordSession({ email, password }));
 }
 

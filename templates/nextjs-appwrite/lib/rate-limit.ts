@@ -53,6 +53,7 @@ export const LIMITS = {
   reset: { email: [3, 60 * MINUTE], ip: [10, 60 * MINUTE] },
   form: { ip: [12, 15 * MINUTE] },
   unlock: { ip: [10, 15 * MINUTE] },
+  account: { email: [20, 15 * MINUTE], ip: [40, 15 * MINUTE] },
 } as const;
 
 // Shared by every visitor, so the site password cannot be guessed faster than

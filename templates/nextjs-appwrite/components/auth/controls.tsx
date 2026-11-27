@@ -51,41 +51,68 @@ type FieldProps = {
   /** Shown at the right of the label, such as a "Forgot password?" link. */
   aside?: React.ReactNode;
   invalid?: boolean;
+  /** A message under the field. Shown only after the person leaves the field. */
+  hint?: string;
 } & React.InputHTMLAttributes<HTMLInputElement>;
 
-export function Field({ appearance, label, aside, invalid, ...input }: FieldProps) {
+/** Tracks whether the person has left the field once, so errors don't shout while typing. */
+function useTouched(onBlur?: React.FocusEventHandler<HTMLInputElement>) {
+  const [touched, setTouched] = useState(false);
+  return {
+    touched,
+    onBlur: (event: React.FocusEvent<HTMLInputElement>) => {
+      setTouched(true);
+      onBlur?.(event);
+    },
+  };
+}
+
+export function Field({ appearance, label, aside, invalid, hint, ...input }: FieldProps) {
   const id = useId();
   const { cls } = resolveAppearance(appearance);
+  const { touched, onBlur } = useTouched(input.onBlur);
+  const showHint = !!hint && touched;
   return (
     <div className="rp-field">
-      <div className="rp-label-row">
-        <label htmlFor={id} className={cls("label")}>
-          {label}
-        </label>
-        {aside}
-      </div>
-      <input id={id} aria-invalid={invalid || undefined} {...input} className={cls("input", input.className)} />
+      <label htmlFor={id} className={cls("label")}>
+        {label}
+      </label>
+      <input
+        id={id}
+        aria-invalid={invalid || showHint || undefined}
+        aria-describedby={showHint ? `${id}-hint` : undefined}
+        {...input}
+        onBlur={onBlur}
+        className={cls("input", input.className)}
+      />
+      {showHint && (
+        <p id={`${id}-hint`} className="rp-field-error">
+          {hint}
+        </p>
+      )}
+      {aside && <div className="rp-aside">{aside}</div>}
     </div>
   );
 }
 
-export function PasswordField({ appearance, label, aside, invalid, ...input }: FieldProps) {
+export function PasswordField({ appearance, label, aside, invalid, hint, ...input }: FieldProps) {
   const id = useId();
   const [shown, setShown] = useState(false);
   const { cls } = resolveAppearance(appearance);
+  const { touched, onBlur } = useTouched(input.onBlur);
+  const showHint = !!hint && touched;
   return (
     <div className="rp-field">
-      <div className="rp-label-row">
-        <label htmlFor={id} className={cls("label")}>
-          {label}
-        </label>
-        {aside}
-      </div>
+      <label htmlFor={id} className={cls("label")}>
+        {label}
+      </label>
       <div className="rp-password">
         <input
           id={id}
-          aria-invalid={invalid || undefined}
+          aria-invalid={invalid || showHint || undefined}
+          aria-describedby={showHint ? `${id}-hint` : undefined}
           {...input}
+          onBlur={onBlur}
           type={shown ? "text" : "password"}
           className={cls("input", input.className)}
         />
@@ -99,6 +126,12 @@ export function PasswordField({ appearance, label, aside, invalid, ...input }: F
           {shown ? "Hide" : "Show"}
         </button>
       </div>
+      {showHint && (
+        <p id={`${id}-hint`} className="rp-field-error">
+          {hint}
+        </p>
+      )}
+      {aside && <div className="rp-aside">{aside}</div>}
     </div>
   );
 }

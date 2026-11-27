@@ -1,6 +1,6 @@
 "use client";
 
-import { createContext, useCallback, useContext, useEffect, useId, useState } from "react";
+import { createContext, useCallback, useContext, useEffect, useId, useRef, useState } from "react";
 import { type Appearance, resolveAppearance } from "@/components/auth/appearance";
 import { consent as consentConfig } from "@/runport.config";
 
@@ -116,10 +116,24 @@ function ConsentPanel({ appearance, view, choice, onDecide, onCustomize }: Panel
   const categories = consentConfig.categories;
   const [draft, setDraft] = useState<ConsentChoice>(choice ?? NONE);
   const all = Object.fromEntries(categories.map((c) => [c, true])) as Partial<ConsentChoice>;
+  const card = useRef<HTMLDivElement>(null);
+
+  // Tell the page how tall the panel is, so pages can keep their content scrollable above it.
+  useEffect(() => {
+    const root = document.documentElement;
+    const node = card.current;
+    if (!node) return;
+    const observer = new ResizeObserver(() => root.style.setProperty("--rp-consent-h", `${node.offsetHeight + 24}px`));
+    observer.observe(node);
+    return () => {
+      observer.disconnect();
+      root.style.removeProperty("--rp-consent-h");
+    };
+  }, []);
 
   return (
     <section className={cls("root", "rp-consent")} style={style} role="dialog" aria-modal="false" aria-labelledby={titleId}>
-      <div className={cls("card", "rp-consent-card")} data-variant="raised">
+      <div ref={card} className={cls("card", "rp-consent-card")} data-variant="raised">
         <h2 id={titleId} className="rp-consent-title">
           {view === "banner" ? "We use cookies" : "Cookie settings"}
         </h2>

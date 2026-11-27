@@ -1,6 +1,6 @@
 import { redirect } from "next/navigation";
 import type { NextRequest } from "next/server";
-import { createAdminClient } from "@/lib/appwrite";
+import { createAuthClient } from "@/lib/appwrite";
 import { takeOAuthState } from "@/lib/oauth-state";
 import { setSessionCookie } from "@/lib/session";
 import { routes } from "@/runport.config";
@@ -15,7 +15,7 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
   const secret = request.nextUrl.searchParams.get("secret");
   if (!(await takeOAuthState(state)) || !userId || !secret) redirect("/login?error=oauth");
   try {
-    const { account } = createAdminClient();
+    const { account } = await createAuthClient();
     await setSessionCookie(await account.createSession({ userId, secret }));
   } catch (error) {
     console.error(error);
