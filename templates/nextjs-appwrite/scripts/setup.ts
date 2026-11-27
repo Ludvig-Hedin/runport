@@ -2,6 +2,7 @@
 // Row security is on: each row is readable and writable only by its creator.
 
 import { AppwriteException, Client, Permission, Query, Role, TablesDB, TablesDBIndexType } from "node-appwrite";
+import { DELETIONS_TABLE, finishPendingDeletions, soleOwner } from "../lib/ownership";
 import { DATABASE_ID, OWNER_COLUMN, TABLES, type ColumnSpec } from "../lib/schema";
 
 function env(name: string): string {
@@ -51,8 +52,8 @@ async function waitForColumn(tableId: string, key: string): Promise<void> {
 }
 
 /**
- * Gives older rows an owner. Only rows whose user permissions all name the
- * same single person are claimed; anything shared or unclear is left alone.
+ * Gives older rows an owner. Only rows whose permissions all name the same
+ * single person are claimed; anything shared or unclear is left alone.
  */
 async function backfillOwners(tableId: string): Promise<void> {
   let cursor: string | undefined;
@@ -62,10 +63,9 @@ async function backfillOwners(tableId: string): Promise<void> {
     const { rows } = await tables.listRows({ databaseId: DATABASE_ID, tableId, queries });
     if (rows.length === 0) break;
     for (const row of rows) {
-      const people = new Set(row.$permissions.flatMap((p) => [...p.matchAll(/user:([A-Za-z0-9._-]+)/g)].map((m) => m[1])));
-      const public_ = row.$permissions.some((p) => /"(any|guests)"|"users(\/[a-z]+)?"|team:|label:/.test(p));
-      if (people.size === 1 && !public_) {
-        await tables.updateRow({ databaseId: DATABASE_ID, tableId, rowId: row.$id, data: { [OWNER_COLUMN]: [...people][0] } });
+      const owner = soleOwner(row.$permissions);
+      if (owner) {
+        await tables.updateRow({ databaseId: DATABASE_ID, tableId, rowId: row.$id, data: { [OWNER_COLUMN]: owner } });
         claimed++;
       }
     }
@@ -113,6 +113,19 @@ async function main(): Promise<void> {
     }
     if (table.personal) await ensureOwner(table.id);
   }
+
+  // Internal record of account deletions; only the server key can see it.
+  const deletions = { databaseId: DATABASE_ID, tableId: DELETIONS_TABLE };
+  if (!(await exists(() => tables.getTable(deletions)))) {
+    await tables.createTable({ ...deletions, name: "Account deletions", permissions: [], rowSecurity: false });
+    console.log(`created table ${DELETIONS_TABLE}`);
+  }
+  if (!(await exists(() => tables.getColumn({ ...deletions, key: "userId" })))) {
+    await tables.createVarcharColumn({ ...deletions, key: "userId", size: 36, required: true });
+    await waitForColumn(DELETIONS_TABLE, "userId");
+  }
+  const finished = await finishPendingDeletions(tables);
+  if (finished) console.log(`finished ${finished} earlier account deletions`);
   console.log("setup done");
 }
 

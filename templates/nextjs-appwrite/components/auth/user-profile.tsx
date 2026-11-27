@@ -22,6 +22,13 @@ export type DeviceInfo = {
 const signedIn = (iso: string) =>
   `Signed in ${new Date(iso).toLocaleString(undefined, { day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" })}`;
 
+/** The sign-in time in the visitor's own time zone. Rendered after mount, as the server cannot know it. */
+function SignedInAt({ iso }: { iso: string }) {
+  const [text, setText] = useState<string | null>(null);
+  useEffect(() => setText(signedIn(iso)), [iso]);
+  return <p className="rp-device-detail">{text ?? "\u00a0"}</p>;
+}
+
 type Props = {
   appearance?: Appearance;
   name: string;
@@ -157,11 +164,11 @@ function Devices({ appearance, devices }: { appearance?: Appearance; devices: De
                 {device.label}
                 {device.current && <span className="rp-badge">This device</span>}
               </p>
-              <p className="rp-device-detail" suppressHydrationWarning>{signedIn(device.signedInAt)}</p>
+              <SignedInAt iso={device.signedInAt} />
             </div>
             {!device.current && (
               <button type="button" className={cls("link")} disabled={busy !== null} aria-busy={busy === device.id || undefined}
-                aria-label={`Sign out ${device.label}, ${signedIn(device.signedInAt).toLowerCase()}`}
+                aria-label={`Sign out ${device.label}`}
                 onClick={() => run(device.id)}>
                 {busy === device.id ? <Spinner /> : "Sign out"}
               </button>

@@ -31,7 +31,7 @@ export async function SignIn({ appearance, error, notice }: WithAppearance & { e
     <CodeSignInForm
       appearance={appearance}
       providers={providers}
-      initial={pending ? { step: "code", email: pending.email, error } : { step: "email", error, notice }}
+      initial={pending ? { step: "code", email: pending.email, error, notice } : { step: "email", error, notice }}
     />
   );
 }
