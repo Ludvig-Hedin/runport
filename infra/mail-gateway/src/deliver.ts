@@ -68,7 +68,7 @@ export class DeliveryError extends Error {
   }
 }
 
-const RETRYABLE = /RATE_LIMIT|DAILY_LIMIT|INTERNAL|DELIVERY_FAILED/;
+const permanentWorkerRefusal = /^E_(?:RECIPIENT_(?:SUPPRESSED|NOT_ALLOWED|PLAN_RESTRICTED)|SENDER_(?:NOT_VERIFIED|DOMAIN_NOT_AVAILABLE|DOMAIN_NOT_CONFIGURED)|ACCOUNT_SUSPENDED|FIELD_MISSING|CONTENT_TOO_LARGE|TOO_MANY_(?:ATTACHMENTS|RECIPIENTS)|HEADERS?_[A-Z_]+)$/;
 
 export function cloudflareDelivery(url: string, token: string): Deliver {
   return async (envelope, raw) => {
@@ -85,10 +85,17 @@ export function cloudflareDelivery(url: string, token: string): Deliver {
       body: new Uint8Array(raw),
     });
     // Status only in errors: the body could echo addresses.
-    if (!res.ok) throw new DeliveryError(`Cloudflare answered ${res.status}`, res.status >= 500 || res.status === 429, res.status < 500);
-    const result = (await res.json()) as { sent: number; failed: number; codes: string[] };
-    if (result.sent > 0) return result.sent;
-    const uncertain = result.codes.some((code) => /INTERNAL|DELIVERY_FAILED|UNKNOWN/.test(code));
-    throw new DeliveryError(`Cloudflare refused: ${result.codes.join(", ")}`, result.codes.some((c) => RETRYABLE.test(c)), !uncertain);
+    if (!res.ok) throw new DeliveryError(`Cloudflare answered ${res.status}`, res.status >= 500 || res.status === 429 || res.status === 408);
+    const result = await res.json().catch(() => null) as { sent?: number; codes?: unknown } | null;
+    const sent = result?.sent;
+    if (typeof sent === "number" && Number.isInteger(sent) && sent > 0 && sent <= envelope.to.length) return sent;
+
+    // A Worker reply with zero confirmed sends is not a lost response.
+    // Retry unsuccessful receipts unless every refusal is known to be permanent.
+    const codes = Array.isArray(result?.codes)
+      ? result.codes.map(code => typeof code === "string" && /^[A-Z0-9_]{1,64}$/.test(code) ? code : "E_UNKNOWN")
+      : [];
+    const retry = sent !== 0 || codes.length === 0 || codes.some(code => !permanentWorkerRefusal.test(code));
+    throw new DeliveryError(`Cloudflare did not confirm a send: ${codes.join(", ") || "no delivery receipt"}`, retry);
   };
 }

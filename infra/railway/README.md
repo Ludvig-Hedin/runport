@@ -122,8 +122,10 @@ Browser reports require a signed page grant and are limited per visitor and
 app before forwarding. The gateway accepts up to 300 browser reports per
 minute across all apps and sends one digest for the previous Stockholm day.
 It retries confirmed temporary refusals with backoff and avoids resending
-when delivery is uncertain. Queued alerts stay with their original Railway
-registration when a slug is reused.
+when the provider gives no reply and may already have accepted the send.
+Permanent owner-address refusals are logged as failures and surfaced by
+the monitor. Queued alerts stay with their original Railway registration
+when a slug is reused.
 
 The five-minute job rotates through up to 20 apps per run. It checks Railway
 deployment and instance state and probes each running app's public URL.

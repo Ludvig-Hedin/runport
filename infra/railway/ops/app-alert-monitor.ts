@@ -169,6 +169,10 @@ export async function checkDeployedApps(env = process.env, request: Fetch = fetc
     check: "app alerts", apps: observations.length, up: count("up"), down: count("down"),
     sleeping: count("sleeping"), unknown: count("unknown"), retired: count("retired"), retryAfterMs,
   }));
+  const failed = response.headers.get("X-Runport-Alert-Delivery-Failures");
+  if (failed && /^[1-9]\d*$/.test(failed)) {
+    throw new Error(`Owner alert delivery failed for ${failed} retained alert(s). See the mail gateway logs.`);
+  }
 }
 
 if (import.meta.main) await checkDeployedApps();

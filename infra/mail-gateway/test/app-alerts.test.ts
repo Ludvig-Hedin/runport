@@ -22,6 +22,7 @@ function fixture({ total = 100, alertPerApp = 10, recipient = owner, delivery }:
   let now = Date.UTC(2026, 10, 10, 9);
   let failure: Error | undefined;
   const inbox: Array<{ to: string[]; raw: string }> = [];
+  const logs: Record<string, unknown>[] = [];
   const limits = new Limits(":memory:", {
     total, perApp: 30, perAppNews: 30, newsShare: 0.7, alertTotal: 30, alertPerApp,
     perAppForm: 50, perHourForm: 10, formShare: 0.1,
@@ -33,7 +34,7 @@ function fixture({ total = 100, alertPerApp = 10, recipient = owner, delivery }:
       inbox.push({ to, raw: raw.toString() });
       return 1;
     }),
-    log: () => {},
+    log: (entry) => logs.push(entry),
   });
   const request = async (path: string, token: string, body?: unknown, method?: string) => handle(new Request("https://runport.invalid" + path, {
     method: method ?? (body === undefined ? "GET" : "POST"),
@@ -55,7 +56,7 @@ function fixture({ total = 100, alertPerApp = 10, recipient = owner, delivery }:
     return request("/internal/app-alerts", monitorKey(master), { observations, retryAfterMs: wait });
   };
   const stats = () => limits.today(new Date(now));
-  return { inbox, limits, request, register, report, poll, list, stats, clock: () => now,
+  return { inbox, logs, limits, request, register, report, poll, list, stats, clock: () => now,
     tick: (time: number) => { now += time; }, fail: (error?: Error) => { failure = error; } };
 }
 
@@ -194,7 +195,7 @@ test("a confirmed temporary refusal releases capacity and backs off, while ambig
   expect(f.inbox).toHaveLength(1);
 });
 
-test("a Worker 200 with sent zero does not charge alert quota or mark the alert sent", async () => {
+test.each(["E_RATE_LIMIT_EXCEEDED", "E_INTERNAL", "E_UNKNOWN"])("a Worker zero-send %s releases quota and retries after backoff", async (code) => {
   let attempts = 0;
   using worker = Bun.serve({
     hostname: "127.0.0.1",
@@ -202,7 +203,7 @@ test("a Worker 200 with sent zero does not charge alert quota or mark the alert 
     fetch() {
       attempts++;
       return Response.json(attempts === 1
-        ? { sent: 0, failed: 1, codes: ["RATE_LIMIT"] }
+        ? { sent: 0, failed: 1, codes: [code] }
         : { sent: 1, failed: 0, codes: [] });
     },
   });
@@ -219,6 +220,31 @@ test("a Worker 200 with sent zero does not charge alert quota or mark the alert 
   await f.poll();
   expect(attempts).toBe(2);
   expect(f.stats().total).toBe(1);
+});
+
+test("permanent owner suppression releases quota and stays visible to the monitor", async () => {
+  let attempts = 0;
+  using worker = Bun.serve({
+    hostname: "127.0.0.1",
+    port: 0,
+    fetch() {
+      attempts++;
+      return Response.json({ sent: 0, failed: 1, codes: ["E_RECIPIENT_SUPPRESSED"] });
+    },
+  });
+  const f = fixture({ delivery: cloudflareDelivery(worker.url.href, "fixture-only") });
+  await f.register();
+  await f.report();
+  const first = await f.poll();
+  expect(f.stats().total).toBe(0);
+  expect(first.headers.get("X-Runport-Alert-Delivery-Failures")).toBe("1");
+  expect(f.logs).toContainEqual(expect.objectContaining({
+    level: "error", result: "owner alert delivery failed", reason: expect.stringContaining("E_RECIPIENT_SUPPRESSED"),
+  }));
+  f.tick(hour);
+  const later = await f.poll();
+  expect(later.headers.get("X-Runport-Alert-Delivery-Failures")).toBe("1");
+  expect(attempts).toBe(1);
 });
 
 test("a backlog of over 50 events for a capped app cannot block another app", async () => {

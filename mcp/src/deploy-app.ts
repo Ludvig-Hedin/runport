@@ -34,8 +34,11 @@ async function railway(args: string[], input?: string, silentError = false): Pro
  */
 async function sleepWhenIdle(project: RailwayProject): Promise<void> {
   const { environmentId, serviceId } = webService(project);
-  const login = JSON.parse(await Bun.file(join(homedir(), ".railway", "config.json")).text()) as { user?: { accessToken?: string; token?: string } };
-  const token = process.env.RAILWAY_API_TOKEN ?? login.user?.accessToken ?? login.user?.token;
+  let token = process.env.RAILWAY_API_TOKEN;
+  if (!token) {
+    const login = JSON.parse(await Bun.file(join(homedir(), ".railway", "config.json")).text()) as { user?: { accessToken?: string; token?: string } };
+    token = login.user?.accessToken ?? login.user?.token;
+  }
   if (!token) throw new Error("Could not find the Railway login to turn on sleeping.");
   const res = await fetch("https://backboard.railway.com/graphql/v2", {
     method: "POST",

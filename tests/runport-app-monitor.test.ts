@@ -82,3 +82,12 @@ test("a Railway 429 stops the batch and persists Retry-After without marking app
   expect(requests).toHaveLength(3);
   expect(requests[2].body).toEqual({ observations: [], retryAfterMs: 600_000 });
 });
+
+test("the monitor surfaces retained owner delivery failures returned by the gateway", async () => {
+  const result = checkDeployedApps({
+    RUNPORT_ALERT_MONITOR_KEY: "fixture", RAILWAY_MONITOR_TOKEN: "fixture",
+  }, async (_url, options) => options?.method === "POST" ?
+    new Response(null, { status: 204, headers: { "X-Runport-Alert-Delivery-Failures": "1" } }) :
+    Response.json({ apps: [] }));
+  await expect(result).rejects.toThrow("Owner alert delivery failed for 1 retained alert");
+});

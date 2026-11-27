@@ -295,10 +295,12 @@ export function createAppAlerts({ path, master, owner, limits, deliver, log, clo
           const backoff = 5 * 60_000 * 2 ** event.failures;
           db.query("UPDATE alerts SET state = 'pending', due = ?, failures = failures + 1 WHERE id = ?")
             .run(clock() + backoff, event.id);
+          log({ app: event.slug, kind: "app-alert", category: event.category, result: "delivery retry scheduled" });
         } else {
-          db.query("UPDATE alerts SET state = 'refused' WHERE id = ?").run(event.id);
+          db.query("UPDATE alerts SET state = 'failed' WHERE id = ?").run(event.id);
+          log({ level: "error", app: event.slug, kind: "app-alert", category: event.category,
+            result: "owner alert delivery failed", reason: error.message });
         }
-        log({ app: event.slug, kind: "app-alert", category: event.category, result: "delivery refused" });
       }
   }
 
@@ -362,7 +364,11 @@ export function createAppAlerts({ path, master, owner, limits, deliver, log, clo
       db.query("DELETE FROM traffic WHERE minute < ?").run(Math.floor(now / 60_000) - 60);
       if (!flushing) flushing = flush().finally(() => { flushing = undefined; });
       await flushing;
-      return status(204);
+      const failed = db.query<{ count: number }, []>(`
+        SELECT COUNT(*) AS count FROM alerts JOIN apps USING (registrationId)
+        WHERE alerts.state IN ('failed', 'refused')
+      `).get()!.count;
+      return new Response(null, { status: 204, headers: { "X-Runport-Alert-Delivery-Failures": String(failed) } });
     }
 
     const match = path.match(/^\/_runport\/alerts\/(register|report)\/([a-z][a-z0-9-]{1,35})$/);
