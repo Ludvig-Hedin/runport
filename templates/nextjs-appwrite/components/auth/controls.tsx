@@ -53,6 +53,8 @@ type FieldProps = {
   invalid?: boolean;
   /** A message under the field. Shown only after the person leaves the field. */
   hint?: string;
+  /** A server validation error shown as soon as a submission is rejected. */
+  error?: string;
 } & React.InputHTMLAttributes<HTMLInputElement>;
 
 /** Tracks whether the person has left the field once, so errors don't shout while typing. */
@@ -67,11 +69,11 @@ function useTouched(onBlur?: React.FocusEventHandler<HTMLInputElement>) {
   };
 }
 
-export function Field({ appearance, label, aside, invalid, hint, ...input }: FieldProps) {
+export function Field({ appearance, label, aside, invalid, hint, error, ...input }: FieldProps) {
   const id = useId();
   const { cls } = resolveAppearance(appearance);
   const { touched, onBlur } = useTouched(input.onBlur);
-  const showHint = !!hint && touched;
+  const feedback = error || (touched ? hint : undefined);
   return (
     <div className="rp-field">
       <label htmlFor={id} className={cls("label")}>
@@ -79,15 +81,15 @@ export function Field({ appearance, label, aside, invalid, hint, ...input }: Fie
       </label>
       <input
         id={id}
-        aria-invalid={invalid || showHint || undefined}
-        aria-describedby={showHint ? `${id}-hint` : undefined}
+        aria-invalid={invalid || !!feedback || undefined}
+        aria-describedby={feedback ? `${id}-hint` : undefined}
         {...input}
         onBlur={onBlur}
         className={cls("input", input.className)}
       />
-      {showHint && (
+      {feedback && (
         <p id={`${id}-hint`} className="rp-field-error">
-          {hint}
+          {feedback}
         </p>
       )}
       {aside && <div className="rp-aside">{aside}</div>}
