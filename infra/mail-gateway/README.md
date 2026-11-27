@@ -21,6 +21,11 @@ Every email the platform sends passes through here: Appwrite's account mails
   http://localhost:8025). `DELIVERY=ses` sends through Amazon SES over HTTPS,
   which also works where outgoing SMTP is blocked (Railway Hobby).
 - `SENDER_DOMAINS` limits who mail can claim to be from. Set it when SES is on.
+- `POST /runport-mail/form` accepts a single app-owner notification over
+  HTTPS for hosted apps outside the private network. Its token is bound to
+  the app ID and one owner inbox. It submits through the same SMTP server
+  and daily cap. On Railway, deploy the gateway and router together to enable
+  this route. Local apps use the gateway bound to loopback port 8026.
 - `GET /stats` on port 8080 inside the network: today's counts per app.
 
 Settings live in `infra/appwrite/appwrite/.env`; the service is defined in

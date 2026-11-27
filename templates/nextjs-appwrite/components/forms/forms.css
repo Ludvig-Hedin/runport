@@ -1,0 +1,22 @@
+@layer components {
+  .rp-public-form textarea.rp-input {
+    padding-block: 14px;
+    height: auto;
+    min-height: 132px;
+    resize: vertical;
+  }
+
+  .rp-public-field-error {
+    color: var(--rp-danger);
+    font-size: 14px;
+  }
+
+  .rp-public-form-status:has(.rp-alert),
+  .rp-public-form-status:has(.rp-notice) {
+    display: block;
+  }
+
+  .rp-public-form-status {
+    display: contents;
+  }
+}

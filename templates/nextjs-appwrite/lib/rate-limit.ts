@@ -51,6 +51,7 @@ export const LIMITS = {
   signIn: { email: [10, 15 * MINUTE], ip: [30, 15 * MINUTE] },
   signUp: { ip: [10, 60 * MINUTE] },
   reset: { email: [3, 60 * MINUTE], ip: [10, 60 * MINUTE] },
+  form: { ip: [12, 15 * MINUTE] },
   unlock: { ip: [10, 15 * MINUTE] },
 } as const;
 

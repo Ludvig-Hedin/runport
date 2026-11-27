@@ -6,6 +6,7 @@ import { DeliveryError, cloudflareDelivery, type Envelope } from "../src/deliver
 import { appPassword, headerFrom } from "../src/identity";
 import { Limits, stockholmDay } from "../src/limits";
 import { createSmtpServer } from "../src/server";
+import { formMailHandler } from "../src/form-mail";
 
 const caps = (total: number, perApp: number, perAppNews = 100, newsShare = 1) => ({ total, perApp, perAppNews, newsShare });
 
@@ -303,5 +304,38 @@ describe("cloudflareDelivery", () => {
       expect((error as DeliveryError).retry).toBe(retry);
       srv.stop();
     }
+  });
+});
+
+describe("form mail HTTPS bridge", () => {
+  const owner = "owner@example.com";
+  const token = createHmac("sha256", config.masterKey).update(`form-mail:shop:${owner}`).digest("hex");
+  const handler = formMailHandler(config);
+  const sendForm = (to = owner, app = "shop", from = "shop@apps.example.com") =>
+    handler(new Request("https://runport.example/runport-mail/form", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${token}`, "X-Runport-App": app },
+      body: JSON.stringify({ from, to, subject: "New message", text: "Hello" }),
+    }));
+
+  beforeEach(() => {
+    limits = new Limits(":memory:", config.caps);
+    delivered = [];
+    failNext = false;
+    partial = null;
+  });
+
+  test("only sends to the one recipient and app bound to the token", async () => {
+    expect((await sendForm("visitor@example.com")).status).toBe(401);
+    expect((await sendForm(owner, "other", "other@apps.example.com")).status).toBe(401);
+    expect((await sendForm(owner, "shop", "other@apps.example.com")).status).toBe(400);
+    expect((await sendForm()).status).toBe(204);
+    expect(delivered).toEqual([{ from: "shop@apps.example.com", to: [owner] }]);
+  });
+
+  test("shares the SMTP daily cap", async () => {
+    await send("shop", ["one@example.net", "two@example.net", "three@example.net"]);
+    expect((await sendForm()).status).toBe(429);
+    expect(delivered).toHaveLength(1);
   });
 });
