@@ -86,7 +86,13 @@ export async function tombstone(users: Users, userId: string): Promise<void> {
   await users.updateLabels({ userId, labels: [] });
 }
 
-const SETTLE_MS = 60_000; // a record closes only after late in-flight writes could have landed
+/**
+ * Recovery leaves a record alone until it is this old. A deletion request
+ * finishes (or rolls back) long before that, so recovery can never act on an
+ * account while its own request is still working on it, and late writes
+ * from requests already under way have landed.
+ */
+const GRACE_MS = 10 * 60_000;
 
 /**
  * Finishes account deletions that stopped part way. Only ever touches an
@@ -100,6 +106,8 @@ export async function finishPendingDeletions(tables: TablesDB, users: Users): Pr
     const record = row as unknown as Row;
     const userId = String(record.userId ?? "");
     const close = () => tables.deleteRow({ databaseId: DATABASE_ID, tableId: DELETIONS_TABLE, rowId: row.$id });
+    const age = Date.now() - Date.parse(String(record.blockedAt ?? ""));
+    if (!(age > GRACE_MS)) continue; // too young (or unreadable): its request may still be running
     try {
       const user = await users.get({ userId }).catch((error) => {
         if (error instanceof AppwriteException && error.code === 404) return null;
@@ -118,9 +126,10 @@ export async function finishPendingDeletions(tables: TablesDB, users: Users): Pr
         continue;
       }
       const left = await sweepOwnedRows(tables, userId);
+      // Re-check right before removing who they were.
+      if ((await users.get({ userId })).status !== false) continue;
       await tombstone(users, userId);
-      const settled = Date.now() - Date.parse(String(record.blockedAt ?? "")) > SETTLE_MS;
-      if (left === 0 && settled) {
+      if (left === 0) {
         await close();
         closed++;
       }
