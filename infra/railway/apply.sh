@@ -20,6 +20,7 @@ export SD_DB_PASS=$(ensure db-pass)
 export SD_DB_ROOT_PASS=$(ensure db-root-pass)
 export SD_ANALYTICS_DB_PASS=$(ensure analytics-db-password)
 export SD_ANALYTICS_APP_SECRET=$(ensure analytics-app-secret)
+export SD_ANALYTICS_INGEST_SECRET=$(ensure analytics-ingest-secret)
 export SD_EXECUTOR_SECRET=$(ensure executor-secret)
 export SD_JOBS_SECRET=$(ensure jobs-secret)
 export SD_GEO_SECRET=$(ensure geo-secret 64)
@@ -35,9 +36,9 @@ export SD_GIT_BACKUP_TOKEN=$(ensure git-backup-token)
 
 case "${1:-plan}" in
   plan) railway config plan "${@:2}" ;;
-  apply)
+  apply|apply-analytics)
     if [ "$#" -gt 2 ] || { [ "$#" -eq 2 ] && [ "$2" != "--no-op" ]; }; then
-      echo "usage: $0 apply [--no-op]" >&2; exit 64
+      echo "usage: $0 $1 [--no-op]" >&2; exit 64
     fi
     git diff --quiet HEAD -- .railway || { echo "Commit the Railway configuration before applying it." >&2; exit 1; }
     umask 077
@@ -46,11 +47,16 @@ case "${1:-plan}" in
     # Let Railway use the same source hash here and at apply time. For this
     # nested configuration it hashes the directory instead of HEAD:.railway.
     railway config plan --out "$plan_dir/plan.json"
-    bun check-git-plan.ts "$plan_dir/plan.json" "${@:2}"
+    if [ "$1" = "apply-analytics" ]; then
+      bun check-git-plan.ts "$plan_dir/plan.json" --analytics "${@:2}"
+    else
+      bun check-git-plan.ts "$plan_dir/plan.json" "${@:2}"
+    fi
     railway config apply --yes --plan "$plan_dir/plan.json"
     ;;
   deploy-git) railway up git --path-as-root --service git --detach ;;
+  deploy-analytics) railway up analytics --path-as-root --service analytics --detach ;;
   deploy-backup) railway up ops --path-as-root --service backup --detach ;;
   deploy-monitor) railway up ops --path-as-root --service monitor --detach ;;
-  *) echo "usage: $0 plan|apply|deploy-git|deploy-backup|deploy-monitor" >&2; exit 64 ;;
+  *) echo "usage: $0 plan|apply|apply-analytics|deploy-git|deploy-analytics|deploy-backup|deploy-monitor" >&2; exit 64 ;;
 esac

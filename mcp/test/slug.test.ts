@@ -20,6 +20,7 @@ describe("toSlug", () => {
   test("refuses names the platform uses for itself", () => {
     expect(() => toSlug("Appwrite")).toThrow("reserved");
     expect(() => toSlug("console")).toThrow("reserved");
+    expect(() => toSlug("analytics")).toThrow("reserved");
     expect(isValidSlug("appwrite")).toBe(false);
   });
 

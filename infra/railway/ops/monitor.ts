@@ -1,4 +1,5 @@
 import { alertOwner, bucket } from "./shared";
+import { analyticsOwnerAlert, updateIncident, type MonitorState } from "./monitor-alerts";
 
 // Every few minutes: is the API up, is the mail gateway up, and is last
 // night's backup there? Emails the owner when something is wrong, at most
@@ -6,8 +7,6 @@ import { alertOwner, bucket } from "./shared";
 
 const ALERT_EVERY_MS = Number(process.env.ALERT_EVERY_HOURS ?? 3) * 60 * 60 * 1000;
 const STATE_KEY = "monitor/state.json";
-
-type State = Record<string, { failingSince: number; lastAlert: number }>;
 
 async function ok(url: string): Promise<string | null> {
   try {
@@ -42,32 +41,25 @@ if (process.env.GIT_HEALTH_URL) {
 }
 
 const analyticsHealthUrl = process.env.ANALYTICS_HEALTH_URL;
+const analyticsChecks = new Set(["Analytics service", "Analytics backup"]);
 if (analyticsHealthUrl) {
-  const results = await Promise.allSettled([ok(analyticsHealthUrl), backupFresh("analytics")]);
-  for (const [index, result] of results.entries()) {
-    const check = index === 0 ? "Analytics service" : "Analytics backup";
-    const problem = result.status === "fulfilled" ? result.value : String(result.reason);
-    console[problem ? "error" : "log"](JSON.stringify({ check, result: problem ? "failing" : "ok", problem }));
-  }
+  checks["Analytics service"] = () => ok(analyticsHealthUrl);
+  checks["Analytics backup"] = () => backupFresh("analytics");
 }
 
 const stateFile = bucket.file(STATE_KEY);
-const state: State = (await stateFile.exists()) ? await stateFile.json() : {};
+const state: MonitorState = (await stateFile.exists()) ? await stateFile.json() : {};
 const now = Date.now();
 for (const [name, check] of Object.entries(checks)) {
   const problem = await check().catch((e: Error) => e.message);
   const known = state[name];
-  if (problem) {
-    const entry = known ?? { failingSince: now, lastAlert: 0 };
-    if (now - entry.lastAlert >= ALERT_EVERY_MS) {
-      await alertOwner(`Runport: ${name} is down`, `${name}: ${problem}\nFailing since ${new Date(entry.failingSince).toISOString()}.\n`);
-      entry.lastAlert = now;
-    }
-    state[name] = entry;
-    console.log(JSON.stringify({ check: name, result: "failing", problem }));
-  } else if (known) {
-    if (known.lastAlert) await alertOwner(`Runport: ${name} is back`, `${name} works again.\n`);
-    delete state[name];
-  }
+  const analytics = analyticsChecks.has(name);
+  const send = analytics ? analyticsOwnerAlert(process.env.ALERT_TO, alertOwner) : alertOwner;
+  await updateIncident(state, name, problem, now, analytics ? Infinity : ALERT_EVERY_MS, send)
+    .catch((error: Error) => {
+      console.error(JSON.stringify({ check: name, result: "alert failed", problem: error.message }));
+    });
+  if (problem) console.log(JSON.stringify({ check: name, result: "failing", problem }));
+  else if (analytics) console.log(JSON.stringify({ check: name, result: known ? "recovered" : "ok" }));
 }
 await stateFile.write(JSON.stringify(state));

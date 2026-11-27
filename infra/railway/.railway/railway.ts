@@ -129,7 +129,7 @@ export default defineRailway(() => {
     healthcheck: "/health",
   });
 
-  const analytics = analyticsService(REGION, secret("SD_ANALYTICS_DB_PASS"), secret("SD_ANALYTICS_APP_SECRET"));
+  const analytics = analyticsService(REGION, secret("SD_ANALYTICS_DB_PASS"), secret("SD_ANALYTICS_APP_SECRET"), secret("SD_ANALYTICS_INGEST_SECRET"));
   const gitData = volume("git-data", { region: REGION_ID, sizeMB: 2000 });
   const git = service("git", {
     // Built from the pinned official Forgejo image in ../git/Dockerfile.
@@ -188,7 +188,7 @@ export default defineRailway(() => {
     replicas: REGION,
     start: "bun monitor.ts",
     deploy: { cronSchedule: "*/5 * * * *", restartPolicyType: "NEVER" },
-    env: { ...opsEnv, ALERT_EVERY_HOURS: "3", ANALYTICS_HEALTH_URL: "http://analytics.railway.internal:3000/api/heartbeat", GIT_HEALTH_URL: "https://git.runport.app/api/healthz" },
+    env: { ...opsEnv, ALERT_EVERY_HOURS: "3", ANALYTICS_HEALTH_URL: "https://analytics.runport.app/runport/ingest", GIT_HEALTH_URL: "https://git.runport.app/api/healthz" },
   });
 
   return project("runport", {

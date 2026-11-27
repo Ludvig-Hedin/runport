@@ -10,6 +10,7 @@ import { formMailSettings } from "./form-mail";
 import { readSecret } from "./keychain";
 import { loadRegistry } from "./registry";
 import { assertAppwriteId } from "./slug";
+import { provisionAppAnalytics } from "./analytics-integration";
 
 const slug = assertAppwriteId(process.argv[2] ?? "");
 const app = (await loadRegistry()).apps.find((a) => a.slug === slug);
@@ -93,7 +94,14 @@ console.log("tables ready");
 // Telemetry off, so an idle app sends nothing out and Railway can put it to sleep.
 const mailUrl = process.env.PLATFORM_FORM_MAIL_URL ?? new URL("/runport-mail/form", config.endpoint).href;
 const formMail = await formMailSettings(slug, mailUrl, current.RUNPORT_FORM_OWNER_EMAIL);
-const vars = { ...formMail, APPWRITE_ENDPOINT: config.endpoint, APPWRITE_PROJECT_ID: slug, APPWRITE_API_KEY: key, APP_URL: `https://${domain}`, PORT: String(app.port), NEXT_TELEMETRY_DISABLED: "1" };
+const analytics = await provisionAppAnalytics(app.folder, slug, domain);
+const { ANALYTICS_INGEST_TOKEN: ingestToken, ...analyticsPublicVars } = analytics.variables;
+const vars = { ...formMail, APPWRITE_ENDPOINT: config.endpoint, APPWRITE_PROJECT_ID: slug, APPWRITE_API_KEY: key, APP_URL: `https://${domain}`, PORT: String(app.port), NEXT_TELEMETRY_DISABLED: "1", ...analyticsPublicVars };
 await railway(["variables", "--service", "web", "--skip-deploys", ...Object.entries(vars).flatMap(([k, v]) => ["--set", `${k}=${v}`])]);
+if (ingestToken) {
+  await railway(["variable", "set", "--service", "web", "--skip-deploys", "--stdin", "ANALYTICS_INGEST_TOKEN"], ingestToken)
+    .catch(() => { throw new Error("Could not set the server-only analytics credential on Railway."); });
+}
+console.log(analytics.note);
 await railway(["up", join(app.folder), "--path-as-root", "--service", "web", "--detach"]);
 console.log("deploy started");
