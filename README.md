@@ -19,7 +19,7 @@ Vercel, Clerk, Convex or Resend.
 - **Websites too:** any Next.js site, with a password lock and search engine
   indexing off until you turn it on.
 - **Agent first:** an MCP tool (`runport`) creates an app, its project, keys,
-  mail sender, private GitHub repo and local copy in one call.
+  mail sender, private Git repo and local copy in one call.
 
 ## What works
 
@@ -27,10 +27,11 @@ Vercel, Clerk, Convex or Resend.
 |---|---|
 | Appwrite on your Mac, login, data per user, files | Works, tested end to end |
 | `create_app` MCP tool | Works locally |
+| Git hosting for new apps | Private repo on Runport by default. Pass `git: "github"` to choose GitHub. Existing apps keep their Git host. |
 | Mail gateway with caps, local test inbox | Works locally, 31 tests |
 | Mail delivery (Cloudflare) | Works online for login codes and other app mail |
 | Hosting online (Railway) | Appwrite, mail gateway and one app online, tested end to end |
-| Backups and outage alerts | Nightly database backup kept 14 days; email alerts every 5 minutes |
+| Backups and outage alerts | Nightly Appwrite and Git backups kept for 14 days. Health checks run every five minutes. |
 | Own addresses (`*.runport.app`) | Admin live at admin.runport.app; app addresses via custom-domain.ts |
 | Newsletters | Not yet: Cloudflare is for transactional mail |
 | Own admin panel | Not started; Appwrite's admin is used meanwhile |
@@ -49,6 +50,12 @@ brand/               logo
 ```
 
 Start with [infra/appwrite/README.md](infra/appwrite/README.md).
+
+To use Runport Git, set up its non-admin provisioning account as described in
+[the Railway guide](infra/railway/README.md#runport-git). From the MCP, call
+`create_app` with `git: "runport"` or leave the option out. The GitHub option
+uses the GitHub CLI's existing login. Both hosts deploy through Railway using
+the app's local folder.
 
 ## License
 
