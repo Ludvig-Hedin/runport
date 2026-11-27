@@ -13,15 +13,15 @@ export async function updateIncident(
   now: number,
   repeatAfterMs: number,
   send?: SendAlert,
-  legacyLogOnly = false,
 ): Promise<void> {
   const known = state[name];
   if (!problem && !known) return;
   const entry: Incident = {
     failingSince: known?.failingSince ?? now,
-    // The first analytics monitor recorded its log time in lastAlert.
-    // Preserve the original failure time and require real send evidence.
-    lastDeliveredAt: known?.lastDeliveredAt ?? (legacyLogOnly ? undefined : known?.lastAlert),
+    // Older monitors saved lastAlert even when nothing was delivered (a log
+    // only, or a Worker reply with sent: 0). It is never proof of an email:
+    // only lastDeliveredAt, written after a confirmed send, counts.
+    lastDeliveredAt: known?.lastDeliveredAt,
   };
   state[name] = entry;
   if (problem) {

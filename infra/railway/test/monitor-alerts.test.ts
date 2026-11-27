@@ -28,9 +28,9 @@ test("a legacy analytics log is not delivery evidence", async () => {
   };
   const subjects: string[] = [];
   const send = async (subject: string) => { subjects.push(subject); };
-  await updateIncident(state, failure, "still down", 3, Infinity, send, true);
-  await updateIncident(state, stale, null, 3, Infinity, send, true);
-  await updateIncident(state, failure, null, 4, Infinity, send, true);
+  await updateIncident(state, failure, "still down", 3, Infinity, send);
+  await updateIncident(state, stale, null, 3, Infinity, send);
+  await updateIncident(state, failure, null, 4, Infinity, send);
   expect(subjects).toEqual(["Runport: Analytics service is down", "Runport: Analytics service is back"]);
   expect(state).toEqual({});
 });
@@ -72,5 +72,25 @@ test("a log-only incident records no notification or recovery email", async () =
   await updateIncident(state, "Analytics service", "failed", 1, Infinity, send);
   await updateIncident(state, "Analytics service", null, 2, Infinity, async subject => { sent.push(subject); });
   expect(sent).toEqual([]);
+  expect(state).toEqual({});
+});
+
+test("a legacy Appwrite or Git lastAlert is not delivery evidence either", async () => {
+  for (const check of ["Appwrite API", "Runport Git"]) {
+    // The old monitor saved lastAlert even when the Worker answered sent: 0.
+    const state: MonitorState = { [check]: { failingSince: 1, lastAlert: 2 } };
+    const subjects: string[] = [];
+    const send = async (subject: string) => { subjects.push(subject); };
+    await updateIncident(state, check, "still down", 3, 10_800_000, send);
+    await updateIncident(state, check, null, 4, 10_800_000, send);
+    expect(subjects).toEqual([`Runport: ${check} is down`, `Runport: ${check} is back`]);
+  }
+});
+
+test("a legacy lastAlert alone never produces a recovery email", async () => {
+  const state: MonitorState = { "Appwrite API": { failingSince: 1, lastAlert: 2 } };
+  const subjects: string[] = [];
+  await updateIncident(state, "Appwrite API", null, 3, 10_800_000, async (subject) => { subjects.push(subject); });
+  expect(subjects).toEqual([]);
   expect(state).toEqual({});
 });
