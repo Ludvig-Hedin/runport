@@ -222,6 +222,29 @@ test.each(["E_RATE_LIMIT_EXCEEDED", "E_INTERNAL", "E_UNKNOWN"])("a Worker zero-s
   expect(f.stats().total).toBe(1);
 });
 
+test.each([
+  ["proxy 502", () => new Response("Bad Gateway", { status: 502 })],
+  ["truncated 200", () => new Response('{"sent":', { headers: { "Content-Type": "application/json" } })],
+  ["unrecognized zero-send receipt", () => Response.json({ sent: 0, failed: 1, codes: ["E_UNRECOGNIZED_FIXTURE"] })],
+] as const)("an ambiguous Worker %s stays charged and is never retried", async (_name, reply) => {
+  let attempts = 0;
+  using worker = Bun.serve({
+    hostname: "127.0.0.1", port: 0,
+    fetch() { attempts++; return reply(); },
+  });
+  const f = fixture({ delivery: cloudflareDelivery(worker.url.href, "fixture-only") });
+  await f.register();
+  await f.report();
+  await f.poll();
+  expect(f.stats().total).toBe(1);
+  expect(f.logs).toContainEqual(expect.objectContaining({ result: "delivery unconfirmed" }));
+  f.tick(hour);
+  await f.report();
+  await f.poll();
+  expect(attempts).toBe(1);
+  expect(f.stats().total).toBe(1);
+});
+
 test("permanent owner suppression releases quota and stays visible to the monitor", async () => {
   let attempts = 0;
   using worker = Bun.serve({

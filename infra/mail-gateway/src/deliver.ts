@@ -68,7 +68,21 @@ export class DeliveryError extends Error {
   }
 }
 
-const permanentWorkerRefusal = /^E_(?:RECIPIENT_(?:SUPPRESSED|NOT_ALLOWED|PLAN_RESTRICTED)|SENDER_(?:NOT_VERIFIED|DOMAIN_NOT_AVAILABLE|DOMAIN_NOT_CONFIGURED)|ACCOUNT_SUSPENDED|FIELD_MISSING|CONTENT_TOO_LARGE|TOO_MANY_(?:ATTACHMENTS|RECIPIENTS)|HEADERS?_[A-Z_]+)$/;
+const permanentWorkerRefusals = new Set([
+  "E_RECIPIENT_SUPPRESSED", "E_RECIPIENT_NOT_ALLOWED", "E_RECIPIENT_PLAN_RESTRICTED",
+  "E_SENDER_NOT_VERIFIED", "E_SENDER_DOMAIN_NOT_AVAILABLE", "E_SENDER_DOMAIN_NOT_CONFIGURED",
+  "E_ACCOUNT_SUSPENDED", "E_FIELD_MISSING", "E_CONTENT_TOO_LARGE", "E_TOO_MANY_ATTACHMENTS", "E_TOO_MANY_RECIPIENTS",
+  "E_HEADER_NOT_ALLOWED", "E_HEADER_USE_API_FIELD", "E_HEADER_VALUE_INVALID", "E_HEADER_VALUE_TOO_LONG",
+  "E_HEADER_NAME_INVALID", "E_HEADERS_TOO_LARGE", "E_HEADERS_TOO_MANY",
+]);
+const retryableWorkerRefusals = new Set([
+  "E_RATE_LIMIT_EXCEEDED", "E_DAILY_LIMIT_EXCEEDED", "E_INTERNAL", "E_INTERNAL_SERVER_ERROR",
+  "E_UNKNOWN", "E_DELIVERY_FAILED", "E_EMAIL_SENDING_NOT_READY",
+]);
+
+function isKnownWorkerRefusal(code: unknown): code is string {
+  return typeof code === "string" && (permanentWorkerRefusals.has(code) || retryableWorkerRefusals.has(code));
+}
 
 export function cloudflareDelivery(url: string, token: string): Deliver {
   return async (envelope, raw) => {
@@ -85,17 +99,18 @@ export function cloudflareDelivery(url: string, token: string): Deliver {
       body: new Uint8Array(raw),
     });
     // Status only in errors: the body could echo addresses.
-    if (!res.ok) throw new DeliveryError(`Cloudflare answered ${res.status}`, res.status >= 500 || res.status === 429 || res.status === 408);
+    if (!res.ok) {
+      throw new DeliveryError(`Cloudflare answered ${res.status} without a delivery receipt`,
+        res.status >= 500 || res.status === 429 || res.status === 408, false);
+    }
     const result = await res.json().catch(() => null) as { sent?: number; codes?: unknown } | null;
     const sent = result?.sent;
     if (typeof sent === "number" && Number.isInteger(sent) && sent > 0 && sent <= envelope.to.length) return sent;
 
-    // A Worker reply with zero confirmed sends is not a lost response.
-    // Retry unsuccessful receipts unless every refusal is known to be permanent.
-    const codes = Array.isArray(result?.codes)
-      ? result.codes.map(code => typeof code === "string" && /^[A-Z0-9_]{1,64}$/.test(code) ? code : "E_UNKNOWN")
-      : [];
-    const retry = sent !== 0 || codes.length === 0 || codes.some(code => !permanentWorkerRefusal.test(code));
-    throw new DeliveryError(`Cloudflare did not confirm a send: ${codes.join(", ") || "no delivery receipt"}`, retry);
+    const codes = result?.codes;
+    if (sent === 0 && Array.isArray(codes) && codes.length && codes.every(isKnownWorkerRefusal)) {
+      throw new DeliveryError(`Cloudflare refused the send: ${codes.join(", ")}`, codes.some(code => retryableWorkerRefusals.has(code)));
+    }
+    throw new DeliveryError("Cloudflare returned an unrecognized delivery receipt", true, false);
   };
 }

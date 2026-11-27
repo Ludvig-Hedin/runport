@@ -33,10 +33,11 @@ const baseEnv = (): Record<string, string> =>
 export default defineRailway(() => {
   const domain = secret("SD_PUBLIC_DOMAIN");
   const appAlertMonitorToken = process.env.SD_APP_ALERT_RAILWAY_TOKEN;
-  const appAlertMonitorEnv = appAlertMonitorToken ? {
-    RAILWAY_MONITOR_TOKEN: appAlertMonitorToken,
-    RUNPORT_ALERT_MONITOR_KEY: secret("SD_APP_ALERT_MONITOR_KEY"),
-  } : {};
+  const appAlertMonitorEnv: Record<string, string> = {};
+  if (appAlertMonitorToken) {
+    appAlertMonitorEnv.RAILWAY_MONITOR_TOKEN = appAlertMonitorToken;
+    appAlertMonitorEnv.RUNPORT_ALERT_MONITOR_KEY = secret("SD_APP_ALERT_MONITOR_KEY");
+  }
   const files = bucket("appwrite-files", { region: "ams" });
 
   const appwriteEnv = {
