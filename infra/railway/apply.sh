@@ -33,14 +33,21 @@ export SD_CF_MAIL_TOKEN=$(get cloudflare-mail-token)
 export SD_PUBLIC_DOMAIN=$(get public-domain || true)
 if [ -z "$SD_PUBLIC_DOMAIN" ]; then echo "Set the router domain first: security add-generic-password -s $SERVICE -a public-domain -w <domain>" >&2; exit 1; fi
 export SD_GIT_BACKUP_TOKEN=$(ensure git-backup-token)
+export SD_APP_ALERT_RAILWAY_TOKEN=$(get app-alert-railway-token || true)
+if [ -n "$SD_APP_ALERT_RAILWAY_TOKEN" ]; then
+  export SD_APP_ALERT_MONITOR_KEY=$(bun -e 'import { createHmac } from "node:crypto"; process.stdout.write(createHmac("sha256", process.env.SD_MAIL_MASTER_KEY).update("runport-app-alerts:monitor").digest("hex"));')
+fi
 
 case "${1:-plan}" in
   plan) railway config plan "${@:2}" ;;
-  apply|apply-analytics)
+  apply|apply-analytics|apply-app-alerts)
     if [ "$#" -gt 2 ] || { [ "$#" -eq 2 ] && [ "$2" != "--no-op" ]; }; then
       echo "usage: $0 $1 [--no-op]" >&2; exit 64
     fi
     git diff --quiet HEAD -- .railway || { echo "Commit the Railway configuration before applying it." >&2; exit 1; }
+    if [ "$1" = "apply-app-alerts" ] && [ -z "$SD_APP_ALERT_RAILWAY_TOKEN" ]; then
+      echo "App alerts need the app-alert-railway-token in the runport-prod Keychain." >&2; exit 1
+    fi
     umask 077
     plan_dir=$(mktemp -d)
     trap 'rm -f -- "$plan_dir/plan.json"; rmdir -- "$plan_dir"' EXIT
@@ -49,6 +56,8 @@ case "${1:-plan}" in
     railway config plan --out "$plan_dir/plan.json"
     if [ "$1" = "apply-analytics" ]; then
       bun check-git-plan.ts "$plan_dir/plan.json" --analytics "${@:2}"
+    elif [ "$1" = "apply-app-alerts" ]; then
+      bun check-git-plan.ts "$plan_dir/plan.json" --app-alerts "${@:2}"
     else
       bun check-git-plan.ts "$plan_dir/plan.json" "${@:2}"
     fi
@@ -58,5 +67,5 @@ case "${1:-plan}" in
   deploy-analytics) railway up analytics --path-as-root --service analytics --detach ;;
   deploy-backup) railway up ops --path-as-root --service backup --detach ;;
   deploy-monitor) railway up ops --path-as-root --service monitor --detach ;;
-  *) echo "usage: $0 plan|apply|apply-analytics|deploy-git|deploy-analytics|deploy-backup|deploy-monitor" >&2; exit 64 ;;
+  *) echo "usage: $0 plan|apply|apply-analytics|apply-app-alerts|deploy-git|deploy-analytics|deploy-backup|deploy-monitor" >&2; exit 64 ;;
 esac

@@ -1,3 +1,4 @@
+import { checkDeployedApps } from "./app-alert-monitor";
 import { alertOwner, bucket } from "./shared";
 import { analyticsOwnerAlert, updateIncident, type MonitorState } from "./monitor-alerts";
 
@@ -63,3 +64,10 @@ for (const [name, check] of Object.entries(checks)) {
   else if (analytics) console.log(JSON.stringify({ check: name, result: known ? "recovered" : "ok" }));
 }
 await stateFile.write(JSON.stringify(state));
+
+if (process.env.RUNPORT_ALERT_MONITOR_KEY && process.env.RAILWAY_MONITOR_TOKEN) {
+  await checkDeployedApps().catch((error: Error) => {
+    console.error(JSON.stringify({ check: "app alerts", result: "check failed", problem: error.message }));
+    process.exitCode = 1;
+  });
+}

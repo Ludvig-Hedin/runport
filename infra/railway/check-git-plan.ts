@@ -65,6 +65,27 @@ export function assertAnalyticsPlan(plan: unknown, requireNoop = false): void {
   }
 }
 
+export function assertAppAlertsPlan(plan: unknown, requireNoop = false): void {
+  const { kind, version, destructive, claim, changeSet } = (plan ?? {}) as {
+    kind?: unknown; version?: unknown; destructive?: unknown; claim?: unknown; changeSet?: { changes?: unknown };
+  };
+  if (kind !== "railway.config.plan" || version !== 1 || destructive !== false ||
+      (claim !== undefined && claim !== false) || !Array.isArray(changeSet?.changes)) {
+    throw new Error("App alerts plan is destructive, claims resources, or uses an unrecognized format.");
+  }
+  if (requireNoop && changeSet.changes.length) throw new Error("Railway plan contains changes. No-op apply refused.");
+  for (const change of changeSet.changes) {
+    const { kind, address, severity, path, variable, after } = change ?? {};
+    const value = after?.type === "literal" && typeof after.value === "string" ? after.value : "";
+    const allowed = (address === "service.mail-gateway" && variable === "ALERT_TO" && value === "ludvig@ludvighedin.com") ||
+      (address === "service.monitor" && variable === "RUNPORT_ALERT_MONITOR_KEY" && /^[a-f0-9]{64}$/.test(value)) ||
+      (address === "service.monitor" && variable === "RAILWAY_MONITOR_TOKEN" && /^[A-Za-z0-9_.-]{16,2048}$/.test(value));
+    if (!allowed || severity !== "safe" || kind !== "variable.set" || path !== `resources.${address}.variables.${variable}`) {
+      throw new Error("Railway plan includes a change outside the app alerts allowlist.");
+    }
+  }
+}
+
 export function assertGitPlan(plan: unknown, requireNoop = false): void {
   if (!plan || typeof plan !== "object") throw new Error("Unrecognized Railway plan.");
   const { kind, version, destructive, claim, changeSet } = plan as {
@@ -98,6 +119,8 @@ if (import.meta.main) {
     if (flags.includes("--analytics")) {
       // Apply the pinned change set and leave whole-project ownership alone.
       assertAnalyticsPlan({ ...plan, claim: plan.claim === true ? false : plan.claim }, flags.includes("--no-op"));
+    } else if (flags.includes("--app-alerts")) {
+      assertAppAlertsPlan({ ...plan, claim: plan.claim === true ? false : plan.claim }, flags.includes("--no-op"));
     } else {
       assertGitPlan(plan, flags.includes("--no-op"));
     }

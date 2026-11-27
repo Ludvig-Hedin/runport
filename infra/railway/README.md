@@ -145,16 +145,16 @@ curl -fsSL https://raw.githubusercontent.com/railwayapp/cli/1e9b3663192e097a4994
 RAILWAY_CLI_SCHEMA="$PWD/output/app-alerts-schema/railway-schema.json" bun test infra/railway/ops/test/app-alert-schema.test.ts
 ```
 
-**Rollout prerequisite.** Land the other shared Railway changes first.
-Wire `checkDeployedApps()` from `ops/app-alert-monitor.ts` into the existing
-monitor after its platform checks, with `RUNPORT_ALERT_MONITOR_KEY` derived
-by `monitorKey()` from the gateway master key and a dedicated Railway monitor
-token in `RAILWAY_MONITOR_TOKEN`. The module can also be run directly with
-`bun app-alert-monitor.ts` using those variables. Deploy the updated gateway
-and router before provisioning app reporting. Set the gateway's `ALERT_TO`
-to the same owner address configured in the platform monitor. Back up the
-gateway's existing SQLite data before rollout and compare the cap counts
-afterward.
+The existing monitor runs app checks after its platform checks once both
+credentials are configured. For rollout, back up the gateway's SQLite
+database and compare cap counts after deployment. Deploy the updated
+gateway and router together before provisioning app reporting. Provision a
+dedicated token that can read the environments of deployed Runport apps, and
+save it as `app-alert-railway-token` in the `runport-prod` Keychain. Use
+`./apply.sh apply-app-alerts` to apply the pinned plan for the two monitor
+credentials and the gateway's owner address. The script derives the
+monitor key from the gateway master key. `./apply.sh deploy-monitor`
+publishes the monitor code.
 
 ## Runport Git
 
