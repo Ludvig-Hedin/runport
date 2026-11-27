@@ -7,9 +7,12 @@ import { AuthCard, Message } from "./card";
 import { SubmitButton } from "./controls";
 import { CodeSignInForm, ForgotPasswordForm, PasswordSignInForm, PasswordSignUpForm, ResetPasswordForm } from "./forms";
 import { UserButtonMenu } from "./user-button";
+import { type DeviceInfo, UserProfileView } from "./user-profile";
+import { createSessionClient } from "@/lib/appwrite";
+import { routes } from "@/runport.config";
 
 // Ready-made auth screens, used like Clerk's components:
-//   <SignIn />  <SignUp />  <ForgotPassword />  <ResetPassword />  <UserButton />
+//   <SignIn />  <SignUp />  <ForgotPassword />  <ResetPassword />  <UserButton />  <UserProfile />
 //   <SignedIn>…</SignedIn>  <SignedOut>…</SignedOut>
 // Style them all in runport.config.ts, or one at a time with `appearance`.
 
@@ -79,4 +82,37 @@ export async function SignedIn({ children }: { children: React.ReactNode }) {
 
 export async function SignedOut({ children }: { children: React.ReactNode }) {
   return (await getUser()) ? null : <>{children}</>;
+}
+
+/** The account page: name, password, signed-in devices and account deletion. Null when signed out. */
+export async function UserProfile({ appearance }: WithAppearance) {
+  const user = await getUser();
+  if (!user) return null;
+  let devices: DeviceInfo[] = [];
+  try {
+    const { account } = await createSessionClient();
+    const { sessions } = await account.listSessions();
+    devices = sessions
+      .sort((a, b) => Number(b.current) - Number(a.current) || b.$createdAt.localeCompare(a.$createdAt))
+      .map((s) => ({
+        id: s.$id,
+        label: [s.clientName, s.osName].filter(Boolean).join(" on ") || "Unknown device",
+        // Sessions are created on the server, so Appwrite's location is the
+        // server's, not the visitor's. Only the browser and date are shown.
+        detail: `Signed in ${new Date(s.$createdAt).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" })}`,
+        current: s.current,
+      }));
+  } catch {
+    // Shown as an empty list; the rest of the page still works.
+  }
+  return (
+    <UserProfileView
+      appearance={appearance}
+      name={user.name}
+      email={user.email}
+      passwordMode={authMode() === "password"}
+      devices={devices}
+      backHref={routes.afterSignIn}
+    />
+  );
 }

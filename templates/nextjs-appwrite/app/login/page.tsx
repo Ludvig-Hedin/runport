@@ -3,7 +3,7 @@ import { SignIn } from "@/components/auth";
 import { getUser } from "@/lib/session";
 import { routes } from "@/runport.config";
 
-type Props = { searchParams: Promise<{ error?: string; reset?: string }> };
+type Props = { searchParams: Promise<{ error?: string; reset?: string; deleted?: string }> };
 
 export default async function LoginPage({ searchParams }: Props) {
   if (await getUser()) redirect(routes.afterSignIn);
@@ -11,7 +11,13 @@ export default async function LoginPage({ searchParams }: Props) {
   return (
     <SignIn
       error={params.error === "oauth" ? "Sign-in was cancelled or did not work. Try again." : undefined}
-      notice={params.reset ? "Password changed. Sign in with your new password." : undefined}
+      notice={
+        params.deleted
+          ? "Your account and its data have been deleted."
+          : params.reset
+            ? "Password changed. Sign in with your new password."
+            : undefined
+      }
     />
   );
 }
