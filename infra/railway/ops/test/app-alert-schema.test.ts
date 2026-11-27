@@ -11,7 +11,7 @@ test.skipIf(!schemaPath)("monitor queries validate against Railway's published C
   const schema = buildClientSchema(input.data);
   const queries: string[] = [];
   await checkApp({
-    slug: "contract-test", projectId: "fixture-project", serviceId: "fixture-service",
+    slug: "contract-test", registrationId: "fixture-registration", projectId: "fixture-project", serviceId: "fixture-service",
     environmentId: "fixture-environment", domain: "fixture.up.railway.app", incident: null,
   }, "fixture-token", async (_url, request) => {
     queries.push(JSON.parse(String(request?.body)).query);

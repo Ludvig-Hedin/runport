@@ -39,10 +39,17 @@ function fixture({ total = 100, alertPerApp = 10, recipient = owner } = {}) {
   const register = (app = slug) => request("/_runport/alerts/register/" + app, registrationKey(master), { ...deployment, slug: app });
   const report = (event: unknown = error, app = slug) =>
     request("/_runport/alerts/report/" + app, appKey(app), event);
-  const poll = (statuses: string[] = [], wait = 0) => request("/internal/app-alerts", monitorKey(master), {
-    observations: statuses.map(status => ({ ...deployment, status, reason: "crashed" })), retryAfterMs: wait,
-  });
   const list = () => request("/internal/app-alerts", monitorKey(master));
+  const poll = async (statuses: string[] = [], wait = 0) => {
+    const observations = [];
+    if (statuses.length) {
+      const { apps } = await (await list()).json() as { apps: Array<{ slug: string; registrationId: string }> };
+      const app = apps.find((item) => item.slug === slug);
+      if (!app) throw new Error("Throwaway app is missing from the test inventory");
+      for (const status of statuses) observations.push({ ...deployment, registrationId: app.registrationId, status, reason: "crashed" });
+    }
+    return request("/internal/app-alerts", monitorKey(master), { observations, retryAfterMs: wait });
+  };
   const stats = () => limits.today(new Date(now));
   return { inbox, limits, request, register, report, poll, list, stats, clock: () => now,
     tick: (time: number) => { now += time; }, fail: (error?: Error) => { failure = error; } };
@@ -76,6 +83,26 @@ test("queued events stay scoped to their original deployment when a slug is reus
   expect(f.inbox).toHaveLength(1);
   expect(f.inbox[0].raw).toContain(newService);
   expect(f.inbox[0].raw).toContain("Antal: 1");
+});
+
+test("a stale retirement observation cannot delete a new registration for the same Railway service", async () => {
+  const f = fixture();
+  const path = "/_runport/alerts/register/" + slug;
+  await f.register();
+  const [snapshot] = (await (await f.list()).json()).apps;
+  expect((await f.request(path, registrationKey(master), deployment, "DELETE")).status).toBe(204);
+  expect((await (await f.list()).json()).apps).toHaveLength(0);
+  await f.register();
+  const [replacement] = (await (await f.list()).json()).apps;
+
+  const response = await f.request("/internal/app-alerts", monitorKey(master), {
+    observations: [{ ...snapshot, status: "retired", reason: "" }],
+  });
+  expect(response.status).toBe(204);
+  expect((await (await f.list()).json()).apps).toEqual([replacement]);
+  expect(replacement.registrationId).toBeString();
+  expect(replacement.registrationId).not.toBe(snapshot.registrationId);
+  expect((await f.report()).status).toBe(204);
 });
 
 test("server fingerprints are keyed, deduplicated, counted and emailed only to the configured owner", async () => {
@@ -169,10 +196,7 @@ test("a backlog of over 50 events for a capped app cannot block another app", as
   await f.register();
   await f.register(other);
   for (let i = 0; i < 60; i++) {
-    for (const status of ["down", "up"]) {
-      const route = "/internal/app-alerts";
-      await f.request(route, monitorKey(master), { observations: [{ ...deployment, status, reason: "crashed" }] }, "POST");
-    }
+    for (const status of ["down", "up"]) await f.poll([status]);
     f.tick(hour);
   }
   // A capped app has dozens of undelivered incidents. The next app still sends.

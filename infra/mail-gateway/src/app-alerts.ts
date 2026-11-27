@@ -36,7 +36,7 @@ export const monitorKey = (master: string) => key(master, "monitor");
 type Registration = { slug: string; projectId: string; environmentId: string; serviceId: string; domain: string };
 type Deployment = Registration & { registrationId: string; incident: number | null; lastIncident: number | null };
 type Report = { source: string; kind: string; fingerprint: string };
-type Observation = { slug: string; serviceId: string; environmentId: string; status: string; reason: string };
+type Observation = { slug: string; registrationId: string; serviceId: string; environmentId: string; status: string; reason: string };
 type Alert = {
   id: string; registrationId: string; slug: string; detail: string; happened: number; count: number; failures: number;
   category: "error" | "digest" | "down" | "up";
@@ -96,6 +96,7 @@ function errorReport(value: unknown): Report | undefined {
 function observation(value: unknown): value is Observation {
   if (!record(value)) return false;
   return typeof value.slug === "string" && APP.test(value.slug) &&
+    typeof value.registrationId === "string" && UUID.test(value.registrationId) &&
     typeof value.serviceId === "string" && UUID.test(value.serviceId) &&
     typeof value.environmentId === "string" && UUID.test(value.environmentId) &&
     typeof value.status === "string" && ["down", "up", "sleeping", "unknown", "retired"].includes(value.status) &&
@@ -215,9 +216,11 @@ export function createAppAlerts({ path, master, owner, limits, deliver, log, clo
   });
 
   const observe = db.transaction((observations: Observation[], now: number) => {
-    for (const { slug, serviceId, environmentId, status, reason } of observations) {
-      const app = db.query<Deployment, [string]>("SELECT * FROM apps WHERE slug = ?").get(slug);
-      if (!app || app.serviceId !== serviceId || app.environmentId !== environmentId || status === "unknown") continue;
+    for (const { slug, registrationId, serviceId, environmentId, status, reason } of observations) {
+      if (status === "unknown") continue;
+      const app = db.query<Deployment, [string, string]>("SELECT * FROM apps WHERE slug = ? AND registrationId = ?")
+        .get(slug, registrationId);
+      if (!app || app.serviceId !== serviceId || app.environmentId !== environmentId) continue;
       if (status === "retired") {
         retire(app);
         continue;
@@ -225,12 +228,12 @@ export function createAppAlerts({ path, master, owner, limits, deliver, log, clo
       const day = stockholmDay(new Date(now));
       if (status === "down" && app.incident === null && (app.lastIncident === null || now - app.lastIncident >= hour)) {
         const id = incidentId(app, now);
-        db.query("UPDATE apps SET incident = ?, lastIncident = ? WHERE slug = ?").run(now, now, slug);
+        db.query("UPDATE apps SET incident = ?, lastIncident = ? WHERE registrationId = ?").run(now, now, registrationId);
         db.query("INSERT INTO alerts (id, registrationId, slug, category, detail, happened, day) VALUES (?, ?, ?, 'down', ?, ?, ?)")
           .run(id, app.registrationId, slug, downReasons[reason], now, day);
       } else if (status === "up" && app.incident !== null) {
         const minutes = Math.max(1, Math.ceil((now - app.incident) / 60_000));
-        db.query("UPDATE apps SET incident = NULL WHERE slug = ?").run(slug);
+        db.query("UPDATE apps SET incident = NULL WHERE registrationId = ?").run(registrationId);
         const parent = incidentId(app, app.incident);
         db.query("INSERT INTO alerts (id, registrationId, slug, category, detail, happened, day, parent) VALUES (?, ?, ?, 'up', ?, ?, ?, ?)")
           .run(crypto.randomUUID(), app.registrationId, slug, `Appen svarar igen. Avbrottet varade cirka ${minutes} minuter.`, now, day, parent);
@@ -336,7 +339,7 @@ export function createAppAlerts({ path, master, owner, limits, deliver, log, clo
         const cursor = db.query<{ cursor: string; waitUntil: number }, []>("SELECT cursor, waitUntil FROM monitor_cursor WHERE id = 1").get()!;
         if (cursor.waitUntil > now) return Response.json({ apps: [] });
         const page = db.query(`
-          SELECT slug, projectId, environmentId, serviceId, domain, incident FROM apps WHERE slug > ? ORDER BY slug LIMIT 20
+          SELECT slug, registrationId, projectId, environmentId, serviceId, domain, incident FROM apps WHERE slug > ? ORDER BY slug LIMIT 20
         `);
         const next = page.all(cursor.cursor);
         return Response.json({ apps: next.length ? next : page.all("") });
@@ -347,7 +350,7 @@ export function createAppAlerts({ path, master, owner, limits, deliver, log, clo
         || !input.observations.every(observation)) return status(400);
       const wait = input.retryAfterMs ?? 0;
       if (typeof wait !== "number" || !Number.isSafeInteger(wait) || wait < 0 || wait > 30 * dayMs) return status(400);
-      observe(input.observations, now);
+      observe.immediate(input.observations, now);
       const last = input.observations.at(-1);
       if (last) db.query("UPDATE monitor_cursor SET cursor = ? WHERE id = 1").run(last.slug);
       if (wait) db.query("UPDATE monitor_cursor SET waitUntil = MAX(waitUntil, ?) WHERE id = 1").run(now + wait);

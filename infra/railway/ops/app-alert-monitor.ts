@@ -1,10 +1,13 @@
-type App = { slug: string; projectId: string; serviceId: string; environmentId: string; domain: string; incident: number | null };
+type App = {
+  slug: string; registrationId: string; projectId: string; serviceId: string;
+  environmentId: string; domain: string; incident: number | null;
+};
 type Deployment = { status: string; deploymentStopped: boolean; instances: Array<{ status: string }> };
 type Instance = {
   serviceId: string; deletedAt: string | null; sleepApplication: boolean | null;
   activeDeployments: Deployment[]; latestDeployment: Deployment | null;
 };
-type Observation = Pick<App, "slug" | "serviceId" | "environmentId"> & {
+type Observation = Pick<App, "slug" | "registrationId" | "serviceId" | "environmentId"> & {
   status: "up" | "down" | "sleeping" | "unknown" | "retired"; reason: string;
 };
 type Fetch = (url: string | URL | Request, init?: RequestInit) => Promise<Response>;
@@ -55,8 +58,9 @@ export async function checkApp(
   pause: (ms: number) => Promise<unknown> = Bun.sleep,
   deadline?: AbortSignal,
 ): Promise<Observation> {
-  const { slug, serviceId, environmentId } = app;
-  const result = (status: Observation["status"], reason = ""): Observation => ({ slug, serviceId, environmentId, status, reason });
+  const { slug, registrationId, serviceId, environmentId } = app;
+  const result = (status: Observation["status"], reason = ""): Observation =>
+    ({ slug, registrationId, serviceId, environmentId, status, reason });
   let instance: Instance | undefined;
   let after: string | null = null;
   try {

@@ -1,7 +1,8 @@
 import { expect, test } from "bun:test";
 import { checkApp, checkDeployedApps } from "../infra/railway/ops/app-alert-monitor";
 
-const app = { slug: "throwaway-app", projectId: "project", serviceId: "service", environmentId: "env", domain: "test.up.railway.app", incident: null };
+const app = { slug: "throwaway-app", registrationId: "registration", projectId: "project", serviceId: "service",
+  environmentId: "env", domain: "test.up.railway.app", incident: null };
 const makeDeployment = (status: string, instances: string[] = [], deploymentStopped = false) =>
   ({ status, deploymentStopped, instances: instances.map((status) => ({ status })) });
 
@@ -65,6 +66,7 @@ test("retires only confirmed deletion or absence after paginating the authorized
   });
   expect(cursors).toEqual([null, "page-2"]);
   expect(result.status).toBe("retired");
+  expect(result.registrationId).toBe(app.registrationId);
   expect((await checkApp(app, "test-token", async () => inventory([], "repeated-cursor"))).status).toBe("unknown");
 });
 
