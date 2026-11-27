@@ -1,0 +1,19 @@
+query MailStorage($project: String!, $environment: String!) {
+  environment(id: $environment, projectId: $project) {
+    id
+    volumeInstances(first: 50) {
+      edges { node { id mountPath serviceId state volume { name } } }
+      pageInfo { hasNextPage }
+    }
+    serviceInstances(first: 50) {
+      edges {
+        node {
+          serviceId
+          activeDeployments { deploymentStopped }
+          latestDeployment { deploymentStopped status }
+        }
+      }
+      pageInfo { hasNextPage }
+    }
+  }
+}

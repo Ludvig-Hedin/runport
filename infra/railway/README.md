@@ -148,21 +148,54 @@ RAILWAY_CLI_SCHEMA="$PWD/output/app-alerts-schema/railway-schema.json" bun test 
 ```
 
 The existing monitor runs app checks after its platform checks once both
-credentials are configured. For rollout, back up the gateway's SQLite
-database and compare cap counts after deployment. Deploy the updated
-gateway and router together before provisioning app reporting. Provision a
-dedicated token that can read the environments of deployed Runport apps, and
-save it as `app-alert-railway-token` in the `runport-prod` Keychain. Use
-`./apply.sh apply-app-alerts` to apply the pinned plan for the two monitor
-credentials and the gateway's owner address. The plan also allows the one-time
-attachment of the existing `mail-gateway-data` volume at `/data`. Back up the
-running gateway's SQLite data before attaching it. Back up any existing volume
-state before importing the live quota counts. `./apply.sh apply-mail-storage`
-can perform the attachment on its own with a pinned plan limited to that
-change. The script derives the monitor
-key from the gateway master key. Use `./apply.sh deploy-gateway`,
-`./apply.sh deploy-router` and `./apply.sh deploy-monitor` for the source
-deployment.
+credentials are configured. Provision a dedicated token that can read the
+environments of deployed Runport apps and save it as `app-alert-railway-token`
+in the `runport-prod` Keychain. Use `./apply.sh apply-app-alerts` to apply the
+pinned plan for the two monitor credentials and the gateway's owner address.
+The script derives the monitor key from the gateway master key.
+
+### Gateway storage cutover
+
+Run the cutover from published main with a short mail maintenance window.
+Railway mounts volumes at runtime, so the existing overlay database must be
+copied before attaching the disk.
+
+1. Use a private local directory for the snapshots. Copy
+   `mail-storage/snapshot.ts` to a temporary path in the running gateway and
+   run it with Bun in an SSH session whose stdin stays open. It waits for
+   other SQLite writers, fences new writes, and emits one private JSON line
+   with the cutover snapshot, row count and checksum. Extract the SQLite copy,
+   validate its checksum and integrity, and keep the SSH session open. Stop the
+   old gateway deployment before releasing the fence or letting its 15-minute
+   watchdog expire. If the fence expires before the stop, take a new snapshot.
+2. Verify Railway reports the old gateway stopped, then run
+   `./apply.sh apply-mail-storage /absolute/path/to/cutover-snapshot.sqlite`.
+   This production-only pinned plan can attach only the existing
+   `mail-gateway-data` volume at `/data`. It requires the fresh SQLite backup
+   and a stopped gateway before planning and before applying. Check again that
+   no old deployment is running after the attachment settles.
+3. Run `./apply.sh prepare-gateway-storage`. This publishes a maintenance
+   container with no SMTP or HTTP listeners to the gateway service. Inspect
+   the mounted directory and export a private backup of its existing contents
+   before making changes. Verify the backup, including checksums and
+   `integrity_check` for any SQLite snapshot. Keep it alongside the overlay
+   backup. Check that `/data`, the quota database, and any SQLite sidecars are
+   writable by the image's non-root `bun` user. If ownership needs correction,
+   inspect the files first and change ownership only on the mount directory
+   and the expected regular database files.
+4. Copy the overlay snapshot into the maintenance container at a private
+   path readable by `bun`. Run
+   `su-exec bun bun /cutover/merge.ts /tmp/cutover/overlay.sqlite /tmp/cutover/volume-before.sqlite`.
+   This snapshots the destination quota database before changing it, merges
+   the higher count for each key, verifies SQLite integrity and record
+   comparisons and writes the persistent readiness receipt. Export the
+   destination snapshot if one was created. Check that the report shows no
+   missing keys from either input before continuing.
+5. Run `./apply.sh deploy-gateway` to start the gateway. This refuses to upload
+   unless the correct volume is attached and reachable with the readiness
+   receipt. Check `/health` and compare the post-start quota database against
+   the snapshots. Then use `./apply.sh deploy-router` and
+   `./apply.sh deploy-monitor` for the other source deployments.
 
 ## Runport Git
 

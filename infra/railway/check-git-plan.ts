@@ -77,6 +77,9 @@ export function assertAppAlertsPlan(plan: unknown, requireNoop = false, storageO
   if (storageOnly && environmentId !== "d95ac74a-26dc-4738-8765-3ab1389e057f") {
     throw new Error("Mail storage apply is pinned to the Runport production environment.");
   }
+  if (storageOnly && changeSet.changes.length > 1) {
+    throw new Error("Mail storage apply allows only the gateway volume attachment.");
+  }
   if (requireNoop && changeSet.changes.length) throw new Error("Railway plan contains changes. No-op apply refused.");
   for (const change of changeSet.changes) {
     const { kind, address, severity, path, variable, field, before, after } = change ?? {};
@@ -86,7 +89,7 @@ export function assertAppAlertsPlan(plan: unknown, requireNoop = false, storageO
       path === "resources.service.mail-gateway.volumeAttachments" && before === null &&
       Object.keys(after ?? {}).length === 1 && Object.keys(mount ?? {}).length === 2 &&
       mount?.mountPath === "/data" && mount.volume === "volume.mail-gateway-data";
-    if (attachesGatewayVolume) continue;
+    if (storageOnly && attachesGatewayVolume) continue;
     const value = after?.type === "literal" && typeof after.value === "string" ? after.value : "";
     const allowed = (address === "service.mail-gateway" && variable === "ALERT_TO" && value === "ludvig@ludvighedin.com") ||
       (address === "service.monitor" && variable === "RUNPORT_ALERT_MONITOR_KEY" && /^[a-f0-9]{64}$/.test(value)) ||

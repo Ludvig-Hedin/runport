@@ -5,12 +5,15 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 SERVICE=runport-prod
+production_project=c93df5f9-ac8b-453d-815a-e9fedd991ca1
+production_environment=d95ac74a-26dc-4738-8765-3ab1389e057f
+gateway_service=8c4bedd8-5d19-42e7-8f05-3289f4f8dff0
 
 require_published_main() {
   local commit main
   commit=$(git rev-parse HEAD)
-  main=$(git ls-remote --exit-code origin refs/heads/main)
-  if [ "$commit" != "${main%%[[:space:]]*}" ] || ! git diff --quiet HEAD -- "$@"; then
+  main=$(gh api --hostname github.com repos/Ludvig-Hedin/runport/git/ref/heads/main --jq .object.sha)
+  if [ "$commit" != "$main" ] || ! git diff --quiet HEAD -- "$@"; then
     echo "Use the published main commit with unmodified release tooling." >&2
     exit 1
   fi
@@ -19,17 +22,25 @@ require_published_main() {
 
 deploy_main_source() (
   if [ "$#" -ne 1 ]; then
-    echo "usage: $0 deploy-gateway|deploy-router|deploy-monitor|deploy-backup" >&2
+    echo "usage: $0 deploy-gateway|prepare-gateway-storage|deploy-router|deploy-monitor|deploy-backup" >&2
     exit 64
   fi
   case "$1" in
     deploy-gateway) service=mail-gateway; source_path=infra/mail-gateway ;;
+    prepare-gateway-storage) service=mail-gateway; source_path=infra/railway/mail-storage ;;
     deploy-router) service=router; source_path=infra/railway/router ;;
     deploy-monitor) service=monitor; source_path=infra/railway/ops ;;
     deploy-backup) service=backup; source_path=infra/railway/ops ;;
     *) exit 64 ;;
   esac
-  commit=$(require_published_main apply.sh)
+  commit=$(require_published_main apply.sh check-mail-storage.ts mail-storage-state.graphql)
+  if [ "$1" = "deploy-gateway" ]; then
+    check_mail_storage mounted
+    railway ssh --project "$production_project" --environment "$production_environment" \
+      --service "$gateway_service" -- test -f /data/.runport-quota-cutover-ready
+  elif [ "$1" = "prepare-gateway-storage" ]; then
+    check_mail_storage mounted-stopped
+  fi
   umask 077
   deploy_dir=$(mktemp -d)
   trap 'rm -r -- "$deploy_dir"' EXIT
@@ -37,12 +48,16 @@ deploy_main_source() (
   # Railway source uploads are separate from configuration plans. Pin both
   # the uploaded tree and the production target instead of using the link.
   railway up "$deploy_dir" --path-as-root --detach --message "Runport $service $commit" \
-    --project c93df5f9-ac8b-453d-815a-e9fedd991ca1 \
-    --environment d95ac74a-26dc-4738-8765-3ab1389e057f --service "$service"
+    --project "$production_project" --environment "$production_environment" --service "$service"
 )
 
+check_mail_storage() {
+  railway api --file mail-storage-state.graphql --compact \
+    --var "project=$production_project" --var "environment=$production_environment" | bun check-mail-storage.ts "$@"
+}
+
 case "${1:-plan}" in
-  deploy-gateway|deploy-router|deploy-monitor|deploy-backup) deploy_main_source "$@"; exit ;;
+  deploy-gateway|prepare-gateway-storage|deploy-router|deploy-monitor|deploy-backup) deploy_main_source "$@"; exit ;;
 esac
 
 get() { security find-generic-password -s "$SERVICE" -a "$1" -w 2>/dev/null; }
@@ -80,12 +95,17 @@ fi
 case "${1:-plan}" in
   plan) railway config plan "${@:2}" ;;
   apply|apply-analytics|apply-app-alerts|apply-mail-storage)
-    if [ "$#" -gt 2 ] || { [ "$#" -eq 2 ] && [ "$2" != "--no-op" ]; }; then
+    if [ "$1" = "apply-mail-storage" ]; then
+      if [ "$#" -ne 2 ] || [ ! -f "$2" ]; then
+        echo "usage: $0 apply-mail-storage /absolute/path/to/cutover-snapshot.sqlite" >&2; exit 64
+      fi
+    elif [ "$#" -gt 2 ] || { [ "$#" -eq 2 ] && [ "$2" != "--no-op" ]; }; then
       echo "usage: $0 $1 [--no-op]" >&2; exit 64
     fi
     git diff --quiet HEAD -- .railway || { echo "Commit the Railway configuration before applying it." >&2; exit 1; }
     if [ "$1" = "apply-mail-storage" ]; then
-      require_published_main apply.sh check-git-plan.ts >/dev/null
+      require_published_main apply.sh check-git-plan.ts check-mail-storage.ts mail-storage-state.graphql >/dev/null
+      check_mail_storage detached-stopped "$2"
     fi
     if [ "$1" = "apply-app-alerts" ] && [ -z "$SD_APP_ALERT_RAILWAY_TOKEN" ]; then
       echo "App alerts need the app-alert-railway-token in the runport-prod Keychain." >&2; exit 1
@@ -101,7 +121,8 @@ case "${1:-plan}" in
     elif [ "$1" = "apply-app-alerts" ]; then
       bun check-git-plan.ts "$plan_dir/plan.json" --app-alerts "${@:2}"
     elif [ "$1" = "apply-mail-storage" ]; then
-      bun check-git-plan.ts "$plan_dir/plan.json" --mail-storage "${@:2}"
+      bun check-git-plan.ts "$plan_dir/plan.json" --mail-storage
+      check_mail_storage detached-stopped "$2"
     else
       bun check-git-plan.ts "$plan_dir/plan.json" "${@:2}"
     fi
@@ -109,5 +130,5 @@ case "${1:-plan}" in
     ;;
   deploy-git) railway up git --path-as-root --service git --detach ;;
   deploy-analytics) railway up analytics --path-as-root --service analytics --detach ;;
-  *) echo "usage: $0 plan|apply|apply-analytics|apply-app-alerts|apply-mail-storage|deploy-git|deploy-analytics|deploy-gateway|deploy-router|deploy-backup|deploy-monitor" >&2; exit 64 ;;
+  *) echo "usage: $0 plan|apply|apply-analytics|apply-app-alerts|apply-mail-storage|prepare-gateway-storage|deploy-git|deploy-analytics|deploy-gateway|deploy-router|deploy-backup|deploy-monitor" >&2; exit 64 ;;
 esac
