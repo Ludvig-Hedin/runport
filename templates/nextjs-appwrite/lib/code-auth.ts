@@ -2,7 +2,7 @@
 
 import { redirect } from "next/navigation";
 import { AppwriteException, ID } from "node-appwrite";
-import { createAdminClient } from "./appwrite";
+import { createAdminClient, createAuthClient } from "./appwrite";
 import { INVALID_EMAIL, TOO_MANY_ATTEMPTS, friendlyError, isEmail } from "./auth-errors";
 import {
   clearCodeAttempts,
@@ -52,7 +52,7 @@ async function verifyCode(input: string): Promise<CodeState> {
   if (Date.now() > pending.expire) return { ...state, error: EXPIRED_CODE };
   if (!takeCodeAttempt(pending.userId)) return { ...state, error: TOO_MANY_ATTEMPTS };
   try {
-    const { account } = createAdminClient();
+    const { account } = await createAuthClient();
     await setSessionCookie(await account.createSession({ userId: pending.userId, secret: code }));
   } catch (error) {
     // Appwrite answers the same for a wrong and an expired code.
