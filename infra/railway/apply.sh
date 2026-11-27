@@ -18,6 +18,8 @@ ensure() {
 export SD_OPENSSL_KEY=$(ensure openssl-key 64)
 export SD_DB_PASS=$(ensure db-pass)
 export SD_DB_ROOT_PASS=$(ensure db-root-pass)
+export SD_ANALYTICS_DB_PASS=$(ensure analytics-db-password)
+export SD_ANALYTICS_APP_SECRET=$(ensure analytics-app-secret)
 export SD_EXECUTOR_SECRET=$(ensure executor-secret)
 export SD_JOBS_SECRET=$(ensure jobs-secret)
 export SD_GEO_SECRET=$(ensure geo-secret 64)
@@ -29,9 +31,26 @@ export SD_SMTP_SYSTEM_PASSWORD=$(printf 'mail-gateway-system' | openssl dgst -sh
 export SD_CF_MAIL_TOKEN=$(get cloudflare-mail-token)
 export SD_PUBLIC_DOMAIN=$(get public-domain || true)
 if [ -z "$SD_PUBLIC_DOMAIN" ]; then echo "Set the router domain first: security add-generic-password -s $SERVICE -a public-domain -w <domain>" >&2; exit 1; fi
+export SD_GIT_BACKUP_TOKEN=$(ensure git-backup-token)
 
 case "${1:-plan}" in
   plan) railway config plan "${@:2}" ;;
-  apply) railway config apply --yes "${@:2}" ;;
-  *) echo "usage: $0 plan|apply" >&2; exit 64 ;;
+  apply)
+    if [ "$#" -gt 2 ] || { [ "$#" -eq 2 ] && [ "$2" != "--no-op" ]; }; then
+      echo "usage: $0 apply [--no-op]" >&2; exit 64
+    fi
+    git diff --quiet HEAD -- .railway || { echo "Commit the Railway configuration before applying it." >&2; exit 1; }
+    umask 077
+    plan_dir=$(mktemp -d)
+    trap 'rm -f -- "$plan_dir/plan.json"; rmdir -- "$plan_dir"' EXIT
+    # Let Railway use the same source hash here and at apply time. For this
+    # nested configuration it hashes the directory instead of HEAD:.railway.
+    railway config plan --out "$plan_dir/plan.json"
+    bun check-git-plan.ts "$plan_dir/plan.json" "${@:2}"
+    railway config apply --yes --plan "$plan_dir/plan.json"
+    ;;
+  deploy-git) railway up git --path-as-root --service git --detach ;;
+  deploy-backup) railway up ops --path-as-root --service backup --detach ;;
+  deploy-monitor) railway up ops --path-as-root --service monitor --detach ;;
+  *) echo "usage: $0 plan|apply|deploy-git|deploy-backup|deploy-monitor" >&2; exit 64 ;;
 esac
