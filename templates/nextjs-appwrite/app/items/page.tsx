@@ -2,7 +2,7 @@ import { redirect } from "next/navigation";
 import { Query, type Models } from "node-appwrite";
 import { createSessionClient } from "@/lib/appwrite";
 import { getUser } from "@/lib/session";
-import { signOut } from "@/lib/auth";
+import { UserButton } from "@/components/auth";
 import { DATABASE_ID } from "@/lib/schema";
 import { addItem, deleteItem, toggleItem } from "./actions";
 
@@ -23,9 +23,7 @@ export default async function ItemsPage() {
     <main className="mx-auto flex max-w-lg flex-col gap-6 p-6">
       <header className="flex items-center justify-between">
         <h1 className="text-2xl font-semibold">Items</h1>
-        <form action={signOut}>
-          <button className="text-sm underline">Sign out {user.name || user.email}</button>
-        </form>
+        <UserButton />
       </header>
 
       <form action={addItem} className="flex gap-2">

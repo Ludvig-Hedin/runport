@@ -1,7 +1,6 @@
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
-import { AuthShell } from "../auth-ui";
-import { UnlockForm } from "./unlock-form";
+import { SiteUnlock } from "@/components/auth";
 import { sitePassword } from "@/lib/config";
 import { safeEqual, safeNextPath, unlockCookieName, unlockToken } from "@/lib/site-lock";
 
@@ -22,9 +21,5 @@ export default async function UnlockPage({ searchParams }: Props) {
   if (!password) redirect(next);
   const cookie = (await cookies()).get(unlockCookieName())?.value;
   if (cookie && safeEqual(cookie, await unlockToken(password))) redirect(next);
-  return (
-    <AuthShell title="Enter password">
-      <UnlockForm next={next} error={params.error ? ERRORS[params.error] : undefined} />
-    </AuthShell>
-  );
+  return <SiteUnlock next={next} error={params.error ? ERRORS[params.error] : undefined} />;
 }

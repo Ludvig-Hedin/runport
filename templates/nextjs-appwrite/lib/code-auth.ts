@@ -13,6 +13,7 @@ import {
 } from "./login-code";
 import { allowed } from "./rate-limit";
 import { setSessionCookie } from "./session";
+import { routes } from "@/runport.config";
 
 // Sign-in with a one-time code by email. The same flow creates new accounts.
 
@@ -62,7 +63,7 @@ async function verifyCode(input: string): Promise<CodeState> {
   }
   clearCodeAttempts(pending.userId);
   await clearPendingLogin();
-  redirect("/items");
+  redirect(routes.afterSignIn);
 }
 
 /** One action for the whole form. The pressed button's `intent` picks the step. */

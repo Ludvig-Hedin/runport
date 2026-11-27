@@ -3,6 +3,7 @@ import type { NextRequest } from "next/server";
 import { createAdminClient } from "@/lib/appwrite";
 import { takeOAuthState } from "@/lib/oauth-state";
 import { setSessionCookie } from "@/lib/session";
+import { routes } from "@/runport.config";
 
 // Appwrite sends people here after Google or GitHub sign-in, with a one-time
 // token in the query. The state in the path must match the cookie set when
@@ -20,5 +21,5 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
     console.error(error);
     redirect("/login?error=oauth");
   }
-  redirect("/items");
+  redirect(routes.afterSignIn);
 }

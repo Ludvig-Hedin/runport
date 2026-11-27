@@ -25,6 +25,27 @@ bun run dev     # the port is in .env.local as PORT when the platform started it
 - Sign-in: `lib/code-auth.ts` (email code), `lib/auth.ts` (password, reset,
   sign out), `lib/oauth.ts` + `app/auth/oauth/[state]/route.ts` (Google, GitHub).
   `lib/session.ts`: `getUser()` and the session cookie.
+- **Auth screens are ready-made components** in `components/auth`, used like
+  Clerk's: `<SignIn />`, `<SignUp />`, `<ForgotPassword />`,
+  `<ResetPassword />`, `<SiteUnlock />`, `<UserButton />`, and
+  `<SignedIn>` / `<SignedOut>` wrappers. Do not rebuild these screens; style
+  them in `runport.config.ts`:
+  - `appearance.variables`: colours (one value or `{ light, dark }`),
+    `borderRadius`, `buttonRadius`, `fontFamily`.
+  - `appearance.layout`: `logoUrl`, `socialButtonsPlacement` (`top` or
+    `bottom`), `card` (`raised` or `flat`).
+  - `appearance.elements`: extra Tailwind classes per part (`card`, `title`,
+    `input`, `primaryButton`, `socialButton`, `userButtonAvatar`, …; the full
+    list is `ELEMENTS` in `components/auth/appearance.ts`). They win over the
+    built-in styles without `!`.
+  - `appName` and `routes.afterSignIn` / `routes.afterSignOut`.
+  Any component also takes an `appearance` prop for a one-off look.
+- **Cookie consent** is built in (`components/consent`). No banner shows while
+  `consent.categories` in `runport.config.ts` is empty, which is right for an
+  app that only has its sign-in cookies. When you add something that sets
+  other cookies (an ad pixel, a chat widget), add its category there and load
+  it inside `<ConsentGate category="marketing">`, or check
+  `useConsent("marketing")`. Put `<CookieSettingsLink />` in the footer.
 - `proxy.ts` runs before every request: the site lock and the noindex header.
 - `lib/rate-limit.ts` caps every sign-in and unlock step per email and visitor.
   The admin key skips Appwrite's own limits, so keep new auth actions behind

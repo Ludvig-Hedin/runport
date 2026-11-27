@@ -1,4 +1,6 @@
 @import "tailwindcss";
+@import "../components/auth/auth.css";
+@import "../components/consent/consent.css";
 
 :root {
   color-scheme: light dark;

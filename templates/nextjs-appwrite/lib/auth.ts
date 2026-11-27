@@ -8,6 +8,7 @@ import { INVALID_EMAIL, TOO_MANY_ATTEMPTS, friendlyError, isEmail } from "./auth
 import { allowed } from "./rate-limit";
 import { appUrl, authMode } from "./config";
 import { setSessionCookie } from "./session";
+import { routes } from "@/runport.config";
 
 // Email + password sign-in, used when AUTH_MODE=password. Sign-out works in every mode.
 
@@ -41,7 +42,7 @@ export async function signUp(_: FormState, form: FormData): Promise<FormState> {
   } catch (error) {
     return { error: friendlyError(error, "Could not create the account.") };
   }
-  redirect("/items");
+  redirect(routes.afterSignIn);
 }
 
 export async function signIn(_: FormState, form: FormData): Promise<FormState> {
@@ -54,7 +55,7 @@ export async function signIn(_: FormState, form: FormData): Promise<FormState> {
   } catch (error) {
     return { error: friendlyError(error, "Could not sign in.") };
   }
-  redirect("/items");
+  redirect(routes.afterSignIn);
 }
 
 /** Emails a reset link. Answers the same whether or not the account exists. */
@@ -101,5 +102,5 @@ export async function signOut(): Promise<void> {
     // Already signed out on the Appwrite side. Clearing the cookie is enough.
   }
   (await cookies()).delete(sessionCookieName());
-  redirect("/login");
+  redirect(routes.afterSignOut);
 }
