@@ -4,6 +4,32 @@ const opsVariables = new Map([
   ["service.monitor", new Set(["GIT_HEALTH_URL"])],
 ]);
 
+const analyticsDefaults = {
+  PORT: "3000", DISABLE_TELEMETRY: "1", DISABLE_UPDATES: "1", PRIVATE_MODE: "1",
+  SALT_ROTATION: "day", CLIENT_IP_HEADER: "x-runport-visitor-ip",
+};
+
+function createsAnalytics(change: any): boolean {
+  if (change?.kind !== "resource.create" || change.severity !== "safe" ||
+      change.address !== "service.analytics" || change.path !== "resources.service.analytics") return false;
+  const { resource } = change;
+  if (resource?.type !== "service" || resource.kind !== "empty" || resource.name !== "analytics" ||
+      resource.address !== change.address || Object.keys(resource).sort().join() !== "address,deploy,kind,name,type,variables") return false;
+  const { deploy, variables } = resource;
+  if (deploy?.healthcheckPath !== "/runport/health" || Object.keys(deploy).length !== 2 ||
+      JSON.stringify(deploy.multiRegionConfig) !== '{"europe-west4-drams3a":{"numReplicas":1}}' ||
+      !variables || Object.keys(variables).length !== Object.keys(analyticsDefaults).length + 3) return false;
+  const literal = (key: string) => variables[key]?.type === "literal" && typeof variables[key].value === "string"
+    ? variables[key].value : undefined;
+  const url = literal("DATABASE_URL");
+  const database = typeof url === "string" ? URL.parse(url) : null;
+  return Object.entries(analyticsDefaults).every(([key, value]) => literal(key) === value) &&
+    ["ANALYTICS_INGEST_SECRET", "APP_SECRET"].every(key => /^[a-f0-9]{64}$/.test(literal(key) ?? "")) &&
+    database?.protocol === "postgresql:" && database.host === "postgresql.railway.internal:5432" &&
+    database.username === "runport_analytics" && !!database.password &&
+    database.pathname === "/runport_analytics" && !database.search && !database.hash;
+}
+
 export function assertAnalyticsPlan(plan: unknown, requireNoop = false): void {
   if (!plan || typeof plan !== "object") throw new Error("Unrecognized Railway plan.");
   const { kind, version, destructive, claim, changeSet } = plan as {
@@ -14,11 +40,14 @@ export function assertAnalyticsPlan(plan: unknown, requireNoop = false): void {
     throw new Error("Analytics plan is destructive, claims resources, or uses an unrecognized format.");
   }
   if (requireNoop && changeSet.changes.length) throw new Error("Railway plan contains changes. No-op apply refused.");
+  const isInstall = changeSet.changes.some(createsAnalytics);
   for (const change of changeSet.changes) {
     const { kind, address, severity, path, variable, field, before, after, details } = change ?? {};
     const analytics = address === "service.analytics";
     const isVariable = kind === "variable.set" && path === `resources.${address}.variables.${variable}` &&
       ((analytics && variable === "ANALYTICS_INGEST_SECRET") ||
+       (isInstall && address === "service.backup" && variable === "ANALYTICS_DATABASE" &&
+        after?.type === "literal" && after.value === "runport_analytics") ||
        (address === "service.monitor" && variable === "ANALYTICS_HEALTH_URL"));
     const isSource = analytics && kind === "resource.update" && field === "source" &&
       path === "resources.service.analytics.source" && after === null &&
@@ -30,8 +59,8 @@ export function assertAnalyticsPlan(plan: unknown, requireNoop = false): void {
       JSON.stringify(after.multiRegionConfig) === JSON.stringify(before.multiRegionConfig) &&
       Array.isArray(details) && details.length === 1 &&
       details[0] === 'deploy.healthcheckPath ("/api/heartbeat" → "/runport/health")';
-    if (severity !== "safe" || !(isVariable || isSource || isHealth)) {
-      throw new Error("Railway plan includes a change outside the analytics cutover allowlist.");
+    if (severity !== "safe" || !(createsAnalytics(change) || isVariable || isSource || isHealth)) {
+      throw new Error("Railway plan includes a change outside the analytics allowlist.");
     }
   }
 }

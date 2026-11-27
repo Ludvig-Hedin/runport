@@ -45,9 +45,13 @@ login on the existing PostgreSQL server. The nightly job saves a separate
 14-day dump under `backups/analytics-*.dump`. The five-minute monitor logs
 analytics health and backup freshness.
 
-For a first install, check `./apply.sh plan` and take a verified Appwrite
-backup. On the linked Runport project, run `./setup-analytics.sh database`
-before applying the configuration. Deploy `analytics` from `infra/railway/analytics`.
+To add analytics for the first time, start with a linked Runport project
+whose PostgreSQL, backup, monitor, and other base services are already in
+place. Analytics uses the existing PostgreSQL volume. Run `./apply.sh plan`
+and check that it only creates `analytics` and sets the analytics variables
+on the shared jobs. Take a verified Appwrite backup and run
+`./setup-analytics.sh database`, then use `./apply.sh apply-analytics` and
+`./apply.sh deploy-analytics`.
 Wait for it to be healthy while it is still private, then run
 `./setup-analytics.sh admin` and `./setup-analytics.sh provisioner`.
 For an existing Runport installation, pass an existing Runport website UUID
@@ -63,8 +67,9 @@ then use `./apply.sh apply-analytics`, `./apply.sh deploy-analytics`, and
 `./apply.sh deploy-monitor` in that order. The analytics apply rejects Git
 changes and accepts only the collector transition and analytics probe settings.
 The monitor checks `GET /runport/ingest`, including a database read, without
-recording an event. Analytics failures and recoveries use the monitor's
-existing throttling and appear in its logs.
+recording an event. It logs analytics failures and stale backups. When the
+configured recipient is `ludvig@ludvighedin.com`, it emails him once per
+incident and once on recovery.
 
 To verify an analytics backup restore, use an uploaded dump from a staging
 fixture. Download it, verify its checksum, and pass it with the source counts
