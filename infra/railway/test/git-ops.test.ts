@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import { assertGitPlan } from "../check-git-plan";
-import { expiredArchives, finishArchive } from "../ops/retention";
+import { expiredArchives, finishArchive, writeVerifiedArchive } from "../ops/retention";
 
 const plan = (changes: object[], destructive = false) => ({
   kind: "railway.config.plan", version: 1, destructive, changeSet: { changes },
@@ -27,6 +27,30 @@ test("Git apply permits its own resources and only the Git job variables", () =>
   }
   expect(() => assertGitPlan(plan([], true))).toThrow();
   expect(() => assertGitPlan({ changes: [] })).toThrow();
+  expect(() => assertGitPlan(plan([]), true)).not.toThrow();
+  expect(() => assertGitPlan(plan([change("service.git", "resource.create")]), true)).toThrow();
+  expect(() => assertGitPlan({ ...plan([]), claim: true }, true)).not.toThrow();
+  expect(() => assertGitPlan({ ...plan([change("service.git", "resource.create")]), claim: true })).toThrow();
+});
+
+test("a stale same-day object must be replaced and verified before pruning", async () => {
+  const candidate = new Blob([new Uint8Array(4096)]);
+  let stored = new Blob([new Uint8Array(1024)]);
+  let writes = 0;
+  let prunes = 0;
+  const destination = {
+    async write(data: Blob) { writes++; stored = data; },
+    async stat() { return { size: stored.size }; },
+  };
+  const prune = async () => { prunes++; };
+  await finishArchive(async () => { await writeVerifiedArchive(candidate, destination); }, prune);
+  expect(stored).toBe(candidate);
+  expect(writes).toBe(1);
+  expect(prunes).toBe(1);
+  const truncated = { ...destination, async stat() { return { size: 1024 }; } };
+  await expect(finishArchive(async () => { await writeVerifiedArchive(candidate, truncated); }, prune)).rejects.toThrow("size");
+  expect(writes).toBe(2);
+  expect(prunes).toBe(1);
 });
 
 test("a failed upload skips only its own prune", async () => {

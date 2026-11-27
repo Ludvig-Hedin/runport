@@ -23,8 +23,19 @@ export function provisioningCredentials(url: string, service?: string) {
   };
 }
 
-export function needsStarterPush(empty: boolean, upstream: string, remoteMainExists: boolean): boolean {
-  return empty || upstream !== "refs/remotes/origin/main" || !remoteMainExists;
+export async function ensureStarterPush(dir: string, clone: string): Promise<void> {
+  const git = ["git", "-c", "credential.interactive=false", "-c", "http.followRedirects=false"];
+  const fetchUrl = await run(["git", "remote", "get-url", "--all", "origin"], dir);
+  const pushUrl = await run(["git", "remote", "get-url", "--push", "--all", "origin"], dir);
+  if (fetchUrl !== clone || pushUrl !== clone) throw new Error("Git origin does not match the Runport repository.");
+  const branch = await run(["git", "symbolic-ref", "--quiet", "--short", "HEAD"], dir).catch(() => "");
+  const remote = branch && await run(["git", "config", "--get-all", `branch.${branch}.remote`], dir).catch(() => "");
+  const merge = branch && await run(["git", "config", "--get-all", `branch.${branch}.merge`], dir).catch(() => "");
+  const advertised = await run([...git, "ls-remote", "--refs", "--heads", clone, mainRef], dir);
+  const remoteMain = advertised.split("\n").some((line) => line.split("\t")[1] === mainRef);
+  if (remote !== "origin" || merge !== mainRef || !remoteMain) {
+    await run([...git, "push", "--set-upstream", "origin", `HEAD:${mainRef}`], dir);
+  }
 }
 
 function api(base: URL, auth: string, path: string, options?: { method: string; body?: string }) {
@@ -144,12 +155,7 @@ export async function createRunportRepo(dir: string, name: string): Promise<stri
     await run(["git", "add", "--", "."], dir);
     await run(["git", "commit", "-q", "-m", "Start from platform template"], dir);
   }
-  const upstream = await run(["git", "for-each-ref", "--format=%(upstream)", mainRef], dir);
-  const git = ["git", "-c", "credential.interactive=false", "-c", "http.followRedirects=false"];
-  const remoteMain = !repo.empty && !!(await run([...git, "ls-remote", "--heads", "origin", mainRef], dir));
-  if (needsStarterPush(repo.empty, upstream, remoteMain)) {
-    await run([...git, "push", "--set-upstream", "origin", `${mainRef}:${mainRef}`], dir);
-  }
+  await ensureStarterPush(dir, clone);
   return url;
 }
 

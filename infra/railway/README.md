@@ -50,7 +50,10 @@ clients can connect on their first request.
 
 Use `./apply.sh plan` and `./apply.sh apply` to configure the Git service.
 The apply command checks a pinned plan and allows only Git, its new volume,
-and the Git settings for the backup and monitor jobs. Review the plan first,
+and the Git settings for the backup and monitor jobs. Use `./apply.sh apply
+--no-op` to verify that Railway accepts the saved plan when there are no
+changes. The apply command leaves ownership of an unchanged plan alone.
+Review the plan first,
 then `./apply.sh deploy-git` to upload its image build. When HTTPS and the
 private backup endpoint work, run `./apply.sh deploy-backup`. Wait for the
 first Git archive before running `./apply.sh deploy-monitor`.

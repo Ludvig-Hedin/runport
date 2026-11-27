@@ -36,14 +36,17 @@ export SD_GIT_BACKUP_TOKEN=$(ensure git-backup-token)
 case "${1:-plan}" in
   plan) railway config plan "${@:2}" ;;
   apply)
-    if [ "$#" -ne 1 ]; then echo "Git apply accepts no extra arguments." >&2; exit 64; fi
+    if [ "$#" -gt 2 ] || { [ "$#" -eq 2 ] && [ "$2" != "--no-op" ]; }; then
+      echo "usage: $0 apply [--no-op]" >&2; exit 64
+    fi
     git diff --quiet HEAD -- .railway || { echo "Commit the Railway configuration before applying it." >&2; exit 1; }
     umask 077
     plan_dir=$(mktemp -d)
     trap 'rm -f -- "$plan_dir/plan.json"; rmdir -- "$plan_dir"' EXIT
-    source_tree=$(git rev-parse HEAD:infra/railway/.railway)
-    railway config plan --out "$plan_dir/plan.json" --source-tree "$source_tree"
-    bun check-git-plan.ts "$plan_dir/plan.json"
+    # Let Railway use the same source hash here and at apply time. For this
+    # nested configuration it hashes the directory instead of HEAD:.railway.
+    railway config plan --out "$plan_dir/plan.json"
+    bun check-git-plan.ts "$plan_dir/plan.json" "${@:2}"
     railway config apply --yes --plan "$plan_dir/plan.json"
     ;;
   deploy-git) railway up git --path-as-root --service git --detach ;;

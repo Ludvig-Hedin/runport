@@ -20,3 +20,15 @@ export async function finishArchive(upload: () => Promise<void>, prune: () => Pr
   await upload();
   await prune();
 }
+
+export async function writeVerifiedArchive(
+  archive: Blob,
+  destination: { write(data: Blob): Promise<unknown>; stat(): Promise<{ size: number }> },
+): Promise<number> {
+  const bytes = archive.size;
+  if (bytes < 1024) throw new Error(`Backup is only ${bytes} bytes.`);
+  await destination.write(archive);
+  const stored = (await destination.stat()).size;
+  if (stored !== bytes) throw new Error(`Stored backup size did not verify (${stored} of ${bytes} bytes).`);
+  return stored;
+}

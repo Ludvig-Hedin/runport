@@ -1,10 +1,11 @@
 import { expect, test } from "bun:test";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { parseGitHost, selectGitHost } from "../src/git-host";
 import { loadRegistry } from "../src/registry";
-import { needsStarterPush, provisioningCredentials } from "../src/runport-git";
+import { ensureStarterPush, provisioningCredentials } from "../src/runport-git";
+import { run } from "../src/exec";
 
 test("new apps use Runport by default or GitHub when requested", () => {
   expect(parseGitHost.parse(undefined)).toBeUndefined();
@@ -75,11 +76,41 @@ test("a package install failure preserves the GitHub choice on retry", async () 
   }
 });
 
-test("an unrelated upstream cannot stand in for the Forgejo starter branch", () => {
-  expect(needsStarterPush(true, "refs/remotes/elsewhere/main", false)).toBe(true);
-  expect(needsStarterPush(false, "refs/remotes/origin/feature", true)).toBe(true);
-  expect(needsStarterPush(false, "refs/remotes/origin/main", false)).toBe(true);
-  expect(needsStarterPush(false, "refs/remotes/origin/main", true)).toBe(false);
+test.each(["master", "main"])("pushes the checked-out %s branch to the real remote main", async (branch) => {
+  const root = await mkdtemp(join(tmpdir(), "runport-git-starter-"));
+  try {
+    const local = join(root, "local");
+    const origin = join(root, "origin.git");
+    const elsewhere = join(root, "elsewhere.git");
+    await mkdir(local);
+    await run(["git", "init", "--quiet", "--initial-branch", branch, local]);
+    await run(["git", "init", "--quiet", "--bare", origin]);
+    await run(["git", "init", "--quiet", "--bare", elsewhere]);
+    const git = (...args: string[]) => run(["git", "-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", ...args], local);
+    await git("remote", "add", "origin", origin);
+    await git("remote", "add", "elsewhere", elsewhere);
+    await git("commit", "--quiet", "--allow-empty", "-m", "Starter");
+    if (branch === "main") {
+      await git("push", "origin", "HEAD:refs/heads/main");
+      await git("config", "remote.elsewhere.fetch", "+refs/heads/feature:refs/remotes/origin/main");
+      await git("push", "elsewhere", "HEAD:refs/heads/feature");
+      await git("fetch", "elsewhere");
+      await git("config", "branch.main.remote", "elsewhere");
+      await git("config", "branch.main.merge", "refs/heads/feature");
+      expect(await git("rev-parse", "--symbolic-full-name", "@{u}")).toBe("refs/remotes/origin/main");
+      await git("commit", "--quiet", "--allow-empty", "-m", "Local change");
+    }
+    await ensureStarterPush(local, origin);
+    const head = await git("rev-parse", "HEAD");
+    expect(await git("ls-remote", "--refs", origin, "refs/heads/main")).toBe(`${head}\trefs/heads/main`);
+    expect(await git("config", `branch.${branch}.remote`)).toBe("origin");
+    expect(await git("config", `branch.${branch}.merge`)).toBe("refs/heads/main");
+    await git("commit", "--quiet", "--allow-empty", "-m", "Keep this change local on retry");
+    await ensureStarterPush(local, origin);
+    expect(await git("ls-remote", "--refs", origin, "refs/heads/main")).toBe(`${head}\trefs/heads/main`);
+  } finally {
+    await rm(root, { recursive: true });
+  }
 });
 
 test("a custom Git origin requires its own explicitly configured Keychain credentials", () => {

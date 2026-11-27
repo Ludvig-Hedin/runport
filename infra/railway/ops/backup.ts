@@ -1,7 +1,7 @@
-import { mkdtemp, rm, stat } from "node:fs/promises";
+import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { archiveKey, expiredArchives, finishArchive, type ArchiveKind } from "./retention";
+import { archiveKey, expiredArchives, finishArchive, writeVerifiedArchive, type ArchiveKind } from "./retention";
 import { alertOwner, bucket, required } from "./shared";
 
 const KEEP_DAYS = Number(process.env.KEEP_DAYS ?? 14);
@@ -14,14 +14,8 @@ async function run(cmd: string[]): Promise<void> {
 }
 
 async function save(file: string, key: string): Promise<void> {
-  const size = (await stat(file)).size;
-  if (size < 1024) throw new Error(`Backup is only ${size} bytes.`);
-  const destination = bucket.file(key);
-  const exists = await destination.exists();
-  if (!exists) await destination.write(Bun.file(file));
-  const stored = (await destination.stat()).size;
-  if (stored < 1024 || (!exists && stored !== size)) throw new Error("Stored backup size did not verify.");
-  console.log(JSON.stringify({ result: "backup ok", key, bytes: stored }));
+  const bytes = await writeVerifiedArchive(Bun.file(file), bucket.file(key));
+  console.log(JSON.stringify({ result: "backup ok", key, bytes }));
 }
 
 async function backupDatabase(dir: string, kind: "appwrite" | "analytics", database?: string): Promise<void> {
