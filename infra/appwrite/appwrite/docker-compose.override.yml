@@ -30,6 +30,8 @@ services:
       - appwrite
     volumes:
       - appwrite-mail-gateway:/data
+    ports:
+      - 127.0.0.1:8026:8080
     environment:
       - GATEWAY_MASTER_KEY=${MAIL_GATEWAY_MASTER_KEY}
       - DELIVERY=${MAIL_DELIVERY:-smtp}

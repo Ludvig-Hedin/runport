@@ -1,17 +1,13 @@
 import type { Metadata } from "next";
 import { connection } from "next/server";
-import { indexingAllowed } from "@/lib/config";
+import { siteMetadata } from "@/lib/seo";
 import { ConsentProvider } from "@/components/consent/consent";
-import { appName } from "@/runport.config";
 import "./globals.css";
 
 export async function generateMetadata(): Promise<Metadata> {
   // Read the env per request, so a build never bakes in the wrong answer.
   await connection();
-  return {
-    title: appName,
-    robots: indexingAllowed() ? undefined : { index: false, follow: false },
-  };
+  return siteMetadata();
 }
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {

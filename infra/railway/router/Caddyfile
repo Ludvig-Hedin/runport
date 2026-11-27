@@ -21,6 +21,9 @@
 	handle /health {
 		respond "ok" 200
 	}
+	handle /runport-mail/form {
+		reverse_proxy mail-gateway.railway.internal:8080
+	}
 	handle /v1/realtime* {
 		reverse_proxy appwrite-realtime.railway.internal:80
 	}

@@ -2,6 +2,7 @@ import { cp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { basename, join } from "node:path";
 import { AppwriteAdmin, AppwriteError } from "./appwrite-admin";
 import { config } from "./config";
+import { formMailSettings } from "./form-mail";
 import { readSecret } from "./keychain";
 import { run, succeeds } from "./exec";
 import { createPrivateRepo as createGitHubRepo } from "./github";
@@ -51,11 +52,14 @@ async function writeEnv(file: string, values: Record<string, string>): Promise<v
   await writeFile(file, `# Written by the platform's create_app tool. Never commit this file.\n${body}\n`, { mode: 0o600 });
 }
 
-async function copyTemplate(folder: string, slug: string, port: number): Promise<void> {
+async function copyTemplate(folder: string, slug: string, port: number, name: string): Promise<void> {
   await cp(config.templateDir, folder, {
     recursive: true,
     filter: (src) => !SKIP_IN_TEMPLATE.has(basename(src)),
   });
+  const appConfig = join(folder, "runport.config.ts");
+  const templateConfig = await readFile(appConfig, "utf8");
+  await writeFile(appConfig, templateConfig.replace('export const appName = "New app";', () => `export const appName = ${JSON.stringify(name)};`));
   const pkgFile = join(folder, "package.json");
   const pkg = JSON.parse(await readFile(pkgFile, "utf8"));
   pkg.name = slug;
@@ -153,7 +157,7 @@ async function provisionApp(input: CreateAppInput): Promise<CreateAppResult> {
   if (await exists(folder)) {
     steps.push(`folder exists: ${folder}`);
   } else {
-    await copyTemplate(folder, slug, port);
+    await copyTemplate(folder, slug, port, input.name);
     steps.push(`copied starter kit to ${folder}`);
   }
 
@@ -164,6 +168,11 @@ async function provisionApp(input: CreateAppInput): Promise<CreateAppResult> {
     Object.assign(env, { APPWRITE_ENDPOINT: config.endpoint, APPWRITE_PROJECT_ID: projectId, APPWRITE_API_KEY: key, PORT: String(port) });
     await writeEnv(envFile, env);
     steps.push(input.apiKey ? "saved the given server key" : "created a server key");
+  }
+  if (!input.projectId && !env.RUNPORT_FORM_MAIL_TOKEN) {
+    const url = process.env.PLATFORM_FORM_MAIL_URL ?? "http://127.0.0.1:8026/runport-mail/form";
+    Object.assign(env, await formMailSettings(slug, url, env.RUNPORT_FORM_OWNER_EMAIL));
+    await writeEnv(envFile, env);
   }
   await writeMcpConfig(folder, env);
 

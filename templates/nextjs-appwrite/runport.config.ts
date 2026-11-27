@@ -6,6 +6,13 @@ import type { Appearance } from "@/components/auth/appearance";
 
 export const appName = "New app";
 
+export const seo: {
+  description?: string;
+  organization?: { name: string; logo?: string; sameAs?: string[] };
+} = {
+  // description: "A short description of your website.",
+};
+
 export const routes = {
   /** Where people land after signing in or creating an account. */
   afterSignIn: "/items",
