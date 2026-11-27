@@ -13,3 +13,6 @@ mcp/logs/
 *.log
 .scratch/
 .playwright-mcp/
+
+# Local test evidence (screenshots, recordings)
+output/

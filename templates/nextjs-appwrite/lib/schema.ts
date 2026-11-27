@@ -11,12 +11,21 @@ export type TableSpec = {
   id: string;
   name: string;
   columns: ColumnSpec[];
+  /**
+   * Each row belongs to one person. Setup adds an indexed `owner` column
+   * (and fills it for older rows that clearly have one owner).
+   * Set the owner on the server with `ownerData()` from lib/owner.ts.
+   */
+  personal?: boolean;
 };
+
+export const OWNER_COLUMN = "owner";
 
 export const TABLES: TableSpec[] = [
   {
     id: "items",
     name: "Items",
+    personal: true,
     columns: [
       { type: "varchar", key: "title", size: 255, required: true },
       { type: "boolean", key: "done", required: false, default: false },

@@ -3,6 +3,7 @@
 import { revalidatePath } from "next/cache";
 import { ID } from "node-appwrite";
 import { createSessionClient } from "@/lib/appwrite";
+import { ownerData } from "@/lib/owner";
 import { DATABASE_ID } from "@/lib/schema";
 
 const TABLE = { databaseId: DATABASE_ID, tableId: "items" };
@@ -14,7 +15,7 @@ export async function addItem(form: FormData): Promise<void> {
   const title = String(form.get("title") ?? "").trim();
   if (!title) return;
   const { tables } = await createSessionClient();
-  await tables.createRow({ ...TABLE, rowId: ID.unique(), data: { title, done: false } });
+  await tables.createRow({ ...TABLE, rowId: ID.unique(), data: { title, done: false, ...(await ownerData()) } });
   revalidatePath("/items");
 }
 

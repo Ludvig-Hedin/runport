@@ -1,0 +1,414 @@
+/* Built-in look of the auth components. It lives in the components layer, so
+   Tailwind classes passed through `appearance.elements` always win. Theme
+   values come from CSS variables that `appearance.variables` overrides. */
+
+@layer components {
+  .rp-root {
+    --rp-primary: light-dark(#111111, #f5f5f5);
+    --rp-primary-text: light-dark(#ffffff, #111111);
+    --rp-bg: light-dark(#ffffff, #161616);
+    --rp-text: light-dark(#111111, #f5f5f5);
+    --rp-muted: light-dark(#5e5e5e, #a3a3a3);
+    --rp-input-bg: light-dark(#f2f2f2, #222222);
+    --rp-border: light-dark(#e6e6e6, #2c2c2c);
+    --rp-danger: light-dark(#b42318, #ff8a80);
+    --rp-success: light-dark(#20552b, #8fd19e);
+    --rp-radius: 18px;
+    --rp-button-radius: 999px;
+    --rp-font: "Inter", -apple-system, BlinkMacSystemFont, "Helvetica Neue", Arial, sans-serif;
+    --rp-ease: cubic-bezier(0.2, 0.8, 0.2, 1);
+
+    font-family: var(--rp-font);
+    color: var(--rp-text);
+    letter-spacing: -0.011em;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  /* Top-aligned, so a message appearing in the form grows the card downward
+     instead of shifting everything above it. */
+  .rp-page {
+    display: flex;
+    min-height: 100dvh;
+    align-items: flex-start;
+    justify-content: center;
+    /* --rp-consent-h is the open cookie panel's height, so nothing stays hidden under it. */
+    padding: max(48px, 14dvh) 16px calc(48px + var(--rp-consent-h, 0px));
+  }
+
+  .rp-card {
+    display: flex;
+    width: 100%;
+    max-width: 400px;
+    flex-direction: column;
+    gap: 24px;
+    padding: 32px 24px;
+    border-radius: calc(var(--rp-radius) + 10px);
+    background: var(--rp-bg);
+  }
+  .rp-card[data-variant="raised"] {
+    border: 1px solid var(--rp-border);
+    box-shadow: 0 1px 2px rgb(0 0 0 / 0.04), 0 12px 32px -12px rgb(0 0 0 / 0.12);
+  }
+  @media (min-width: 480px) {
+    .rp-card { padding: 40px 36px; }
+  }
+  /* On a phone a flat page reads better than a floating box. */
+  @media (max-width: 479px) {
+    .rp-page { padding-top: max(32px, 8dvh); }
+    .rp-card[data-variant="raised"] {
+      border-color: transparent;
+      background: transparent;
+      box-shadow: none;
+      padding-inline: 4px;
+    }
+  }
+
+  .rp-header {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 6px;
+    text-align: center;
+  }
+  .rp-logo {
+    display: grid;
+    width: 44px;
+    height: 44px;
+    margin-bottom: 10px;
+    place-items: center;
+    overflow: hidden;
+    border-radius: 12px;
+    background: var(--rp-primary);
+    color: var(--rp-primary-text);
+    font-size: 20px;
+    font-weight: 600;
+  }
+  .rp-logo img { width: 100%; height: 100%; object-fit: contain; background: var(--rp-bg); }
+  .rp-title {
+    margin: 0;
+    font-size: 24px;
+    font-weight: 600;
+    line-height: 1.15;
+    letter-spacing: -0.03em;
+  }
+  .rp-subtitle {
+    margin: 0;
+    font-size: 15px;
+    line-height: 1.45;
+    color: var(--rp-muted);
+    overflow-wrap: anywhere;
+    text-wrap: balance;
+  }
+  .rp-subtitle strong { display: inline-block; max-width: 100%; color: var(--rp-text); font-weight: 500; }
+
+  .rp-body { display: flex; flex-direction: column; gap: 20px; }
+  .rp-form { display: flex; flex-direction: column; gap: 14px; }
+  .rp-social { display: flex; flex-direction: column; gap: 10px; }
+
+  /* Label and aside share the first row; the aside comes after the input in
+     the page order, so Tab goes label → input → "Forgot password?". */
+  .rp-field { display: grid; grid-template-columns: 1fr auto; align-items: baseline; gap: 6px 12px; }
+  .rp-field > .rp-label { grid-row: 1; grid-column: 1; }
+  .rp-field > .rp-aside { grid-row: 1; grid-column: 2; justify-self: end; }
+  .rp-field > .rp-input,
+  .rp-field > .rp-password,
+  .rp-field > .rp-field-error { grid-column: 1 / -1; }
+  .rp-field-error { margin: 0; font-size: 13px; color: var(--rp-danger); }
+  .rp-label { font-size: 14px; font-weight: 600; }
+
+  .rp-input {
+    width: 100%;
+    height: 56px;
+    padding: 0 16px;
+    border: 1px solid transparent;
+    border-radius: var(--rp-radius);
+    background: var(--rp-input-bg);
+    color: var(--rp-text);
+    font: inherit;
+    font-size: 16px; /* 16px or more keeps iOS from zooming */
+    outline: none;
+    transition: border-color 150ms var(--rp-ease);
+  }
+  .rp-input::placeholder { color: var(--rp-muted); opacity: 0.8; }
+  .rp-input:focus-visible { border-color: var(--rp-text); }
+  .rp-input[aria-invalid="true"] { border-color: var(--rp-danger); }
+
+  .rp-password { position: relative; }
+  .rp-password .rp-input { padding-right: 76px; }
+  .rp-reveal {
+    position: absolute;
+    top: 50%;
+    right: 8px;
+    height: 36px;
+    padding: 0 10px;
+    transform: translateY(-50%);
+    border: 0;
+    border-radius: 10px;
+    background: transparent;
+    color: var(--rp-muted);
+    font: inherit;
+    font-size: 14px;
+    font-weight: 500;
+    cursor: pointer;
+  }
+  .rp-reveal:focus-visible { outline: 2px solid var(--rp-text, currentColor); outline-offset: -2px; }
+
+  .rp-primaryButton,
+  .rp-secondaryButton,
+  .rp-socialButton {
+    display: inline-flex;
+    width: 100%;
+    height: 52px;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+    padding: 0 20px;
+    border-radius: var(--rp-button-radius);
+    font: inherit;
+    font-size: 16px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: transform 150ms var(--rp-ease), opacity 150ms var(--rp-ease), background-color 150ms var(--rp-ease);
+    -webkit-tap-highlight-color: transparent;
+  }
+  .rp-primaryButton {
+    border: 0;
+    background: var(--rp-primary);
+    color: var(--rp-primary-text);
+  }
+  .rp-secondaryButton,
+  .rp-socialButton {
+    border: 0;
+    background: var(--rp-bg);
+    color: var(--rp-text);
+    box-shadow: inset 0 0 0 1px var(--rp-border);
+  }
+  @media (hover: hover) {
+    .rp-primaryButton:hover:not(:disabled) { opacity: 0.88; }
+    .rp-secondaryButton:hover:not(:disabled),
+    .rp-socialButton:hover:not(:disabled) { background: var(--rp-input-bg); }
+  }
+  .rp-primaryButton:active:not(:disabled),
+  .rp-secondaryButton:active:not(:disabled),
+  .rp-socialButton:active:not(:disabled) { transform: scale(0.97); }
+  .rp-primaryButton:disabled { cursor: default; background: var(--rp-input-bg); color: var(--rp-muted); }
+  .rp-primaryButton[aria-busy="true"] { background: var(--rp-primary); color: var(--rp-primary-text); }
+  .rp-secondaryButton:disabled,
+  .rp-socialButton:disabled { cursor: default; opacity: 0.5; }
+  .rp-primaryButton:focus-visible,
+  .rp-secondaryButton:focus-visible,
+  .rp-socialButton:focus-visible { outline: 2px solid var(--rp-text, currentColor); outline-offset: 2px; }
+  .rp-socialButton svg { width: 18px; height: 18px; flex-shrink: 0; }
+
+  .rp-spinner {
+    width: 18px;
+    height: 18px;
+    border: 2px solid currentColor;
+    border-right-color: transparent;
+    border-radius: 999px;
+    animation: rp-spin 700ms linear infinite;
+  }
+  @keyframes rp-spin { to { transform: rotate(360deg); } }
+  @media (prefers-reduced-motion: reduce) { .rp-spinner { animation-duration: 2s; } }
+
+  .rp-divider {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    color: var(--rp-muted);
+    font-size: 13px;
+  }
+  .rp-divider::before,
+  .rp-divider::after { content: ""; height: 1px; flex: 1; background: var(--rp-border); }
+
+  .rp-link {
+    padding: 0;
+    border: 0;
+    background: none;
+    color: var(--rp-text);
+    font: inherit;
+    font-size: 14px;
+    font-weight: 500;
+    text-decoration: underline;
+    text-decoration-color: var(--rp-border);
+    text-underline-offset: 3px;
+    cursor: pointer;
+  }
+  @media (hover: hover) { .rp-link:hover { text-decoration-color: currentColor; } }
+  .rp-link:disabled { cursor: default; opacity: 0.5; }
+  .rp-link:focus-visible { outline: 2px solid var(--rp-text, currentColor); outline-offset: 2px; border-radius: 4px; }
+
+  .rp-alert,
+  .rp-notice {
+    margin: 0;
+    padding: 12px 14px;
+    border-radius: calc(var(--rp-radius) - 6px);
+    font-size: 14px;
+    line-height: 1.4;
+  }
+  .rp-alert {
+    background: color-mix(in srgb, var(--rp-danger) 10%, transparent);
+    color: var(--rp-danger);
+  }
+  .rp-notice {
+    background: color-mix(in srgb, var(--rp-success) 12%, transparent);
+    color: var(--rp-success);
+  }
+
+  .rp-row { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 8px 16px; }
+
+  .rp-footer {
+    margin: 0;
+    text-align: center;
+    font-size: 14px;
+    color: var(--rp-muted);
+  }
+
+  /* Six boxes drawn over one real input, so paste, autofill and screen
+     readers all see a normal one-time-code field. */
+  .rp-codeInput { position: relative; }
+  .rp-codeInput input {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    opacity: 0;
+    font-size: 16px;
+    caret-color: transparent;
+    cursor: text;
+  }
+  .rp-code-boxes { display: grid; grid-template-columns: repeat(6, 1fr); gap: 8px; pointer-events: none; }
+  .rp-code-box {
+    display: grid;
+    height: 56px;
+    place-items: center;
+    border: 1px solid transparent;
+    border-radius: calc(var(--rp-radius) - 4px);
+    background: var(--rp-input-bg);
+    font-size: 22px;
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+    transition: border-color 150ms var(--rp-ease);
+  }
+  .rp-codeInput input:focus-visible + .rp-code-boxes .rp-code-box[data-active="true"] { border-color: var(--rp-text); }
+  .rp-codeInput[data-invalid="true"] .rp-code-box { border-color: var(--rp-danger); }
+  .rp-code-caret { width: 2px; height: 24px; background: var(--rp-text); animation: rp-blink 1s steps(1) infinite; }
+  @keyframes rp-blink { 50% { opacity: 0; } }
+  @media (prefers-reduced-motion: reduce) { .rp-code-caret { animation: none; } }
+
+  /* User button */
+  .rp-userButton { position: relative; display: inline-flex; }
+  .rp-userButton-trigger {
+    display: inline-flex;
+    padding: 2px;
+    border: 0;
+    border-radius: 999px;
+    background: none;
+    cursor: pointer;
+  }
+  .rp-userButton-trigger:focus-visible { outline: 2px solid var(--rp-text, currentColor); outline-offset: 2px; }
+  .rp-userButtonAvatar {
+    display: grid;
+    width: 36px;
+    height: 36px;
+    place-items: center;
+    border-radius: 999px;
+    background: var(--rp-primary);
+    color: var(--rp-primary-text);
+    font-size: 14px;
+    font-weight: 600;
+    letter-spacing: 0;
+  }
+  .rp-userButtonMenu {
+    position: absolute;
+    top: calc(100% + 8px);
+    right: 0;
+    z-index: 50;
+    width: min(280px, calc(100vw - 32px));
+    padding: 8px;
+    border: 1px solid var(--rp-border);
+    border-radius: calc(var(--rp-radius) + 2px);
+    background: var(--rp-bg);
+    box-shadow: 0 16px 40px -16px rgb(0 0 0 / 0.25);
+    transform-origin: top right;
+    animation: rp-pop 160ms cubic-bezier(0.16, 1, 0.3, 1);
+  }
+  @keyframes rp-pop { from { opacity: 0; transform: scale(0.96) translateY(-4px); } }
+  @media (prefers-reduced-motion: reduce) { .rp-userButtonMenu { animation: none; } }
+  .rp-userButton-who { display: flex; align-items: center; gap: 12px; padding: 8px 8px 12px; }
+  .rp-userButton-who .rp-userButtonAvatar { flex-shrink: 0; }
+  .rp-userButton-name { margin: 0; font-size: 15px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .rp-userButton-email { margin: 0; font-size: 13px; color: var(--rp-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .rp-userButton-text { min-width: 0; }
+  .rp-userButtonMenuItem {
+    display: flex;
+    width: 100%;
+    height: 44px;
+    align-items: center;
+    gap: 10px;
+    padding: 0 10px;
+    border: 0;
+    border-top: 1px solid var(--rp-border);
+    border-radius: 0;
+    background: none;
+    color: var(--rp-text);
+    font: inherit;
+    font-size: 15px;
+    text-align: left;
+    cursor: pointer;
+  }
+  .rp-userButtonMenuItem:first-of-type { border-radius: 0 0 10px 10px; }
+  @media (hover: hover) { .rp-userButtonMenuItem:hover:not(:disabled) { background: var(--rp-input-bg); } }
+  .rp-userButtonMenuItem:focus-visible { outline: 2px solid var(--rp-text, currentColor); outline-offset: -2px; }
+  .rp-userButtonMenuItem:disabled { cursor: default; opacity: 0.5; }
+  .rp-userButtonMenuItem svg { width: 18px; height: 18px; color: var(--rp-muted); }
+}
+
+@layer components {
+  .rp-hint { font-size: 13px; color: var(--rp-muted); }
+}
+
+/* Account page */
+@layer components {
+  .rp-profile { min-height: 100dvh; padding: 32px 16px calc(64px + var(--rp-consent-h, 0px)); }
+  .rp-profile-inner { display: flex; max-width: 640px; flex-direction: column; gap: 16px; margin: 0 auto; }
+  .rp-back { align-self: flex-start; text-decoration: none; color: var(--rp-muted); }
+  .rp-profile-head { display: flex; flex-direction: column; gap: 4px; margin: 8px 0 8px; }
+  .rp-profile .rp-title { font-size: 32px; letter-spacing: -0.035em; }
+  .rp-section.rp-card { max-width: none; gap: 16px; padding: 24px; }
+  /* Unlike the sign-in card, sections stay cards on phones. */
+  .rp-section.rp-card[data-variant="raised"] {
+    border: 1px solid var(--rp-border);
+    background: var(--rp-bg);
+    box-shadow: none;
+    padding: 20px;
+  }
+  @media (min-width: 480px) { .rp-section.rp-card[data-variant="raised"] { padding: 24px; } }
+  .rp-section-head { display: flex; flex-direction: column; gap: 4px; }
+  .rp-section-title { margin: 0; font-size: 17px; font-weight: 600; letter-spacing: -0.02em; }
+  .rp-section-text { margin: 0; font-size: 14px; line-height: 1.45; color: var(--rp-muted); }
+  .rp-section-actions { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 12px 16px; }
+  .rp-section-actions .rp-primaryButton,
+  .rp-section-actions .rp-secondaryButton { width: auto; min-width: 140px; height: 44px; font-size: 15px; }
+  .rp-section[data-danger] .rp-section-title { color: var(--rp-danger); }
+  .rp-danger-button { color: var(--rp-danger); }
+  /* A fixed deep red: white text on it passes 4.5:1 in both themes. */
+  .rp-primaryButton.rp-danger-solid:not(:disabled) { background: #b42318; color: #fff; }
+
+  .rp-devices { display: flex; flex-direction: column; margin: 0; padding: 0; list-style: none; }
+  .rp-device { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 12px 0; border-top: 1px solid var(--rp-border); }
+  .rp-device:first-child { border-top: 0; padding-top: 0; }
+  .rp-device-text { min-width: 0; }
+  .rp-device-name { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 0; font-size: 15px; font-weight: 500; }
+  .rp-device-detail { margin: 2px 0 0; font-size: 13px; color: var(--rp-muted); }
+  .rp-badge { padding: 2px 8px; border-radius: 999px; background: var(--rp-input-bg); color: var(--rp-muted); font-size: 12px; font-weight: 500; }
+  a.rp-userButtonMenuItem { text-decoration: none; }
+}
+
+@layer components {
+  .rp-status { outline: none; }
+  .rp-notice:focus { outline: none; }
+  /* Focused controls scroll clear of the open cookie panel. */
+  html { scroll-padding-bottom: var(--rp-consent-h, 0px); }
+  .rp-status:empty { display: none; }
+}
