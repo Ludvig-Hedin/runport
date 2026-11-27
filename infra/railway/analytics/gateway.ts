@@ -3,7 +3,8 @@ import { isIP } from "node:net";
 
 const siteId = /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/;
 const allowedApi = new Set([
-  "2fa", "admin", "auth", "batch", "boards", "dashboard", "heartbeat", "links",
+  // Never "send" or "batch": both are Umami's unauthenticated collectors.
+  "2fa", "admin", "auth", "boards", "dashboard", "heartbeat", "links",
   "me", "pixels", "realtime", "share", "teams", "users", "websites",
 ]);
 const maxEventBytes = 16_384;
