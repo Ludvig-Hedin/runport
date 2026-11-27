@@ -14,7 +14,15 @@ export type TableSpec = {
   name: string;
   columns: ColumnSpec[];
   serverOnly?: boolean;
+  /**
+   * Each row belongs to one person. Setup adds an indexed `owner` column, and
+   * deleting an account removes exactly the rows whose owner is that person.
+   * Set the owner on the server with `ownerData()` from lib/owner.ts.
+   */
+  personal?: boolean;
 };
+
+export const OWNER_COLUMN = "owner";
 
 export const TABLES: TableSpec[] = [
   {
@@ -30,6 +38,7 @@ export const TABLES: TableSpec[] = [
   {
     id: "items",
     name: "Items",
+    personal: true,
     columns: [
       { type: "varchar", key: "title", size: 255, required: true },
       { type: "boolean", key: "done", required: false, default: false },

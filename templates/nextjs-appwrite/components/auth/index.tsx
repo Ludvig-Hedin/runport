@@ -31,7 +31,7 @@ export async function SignIn({ appearance, error, notice }: WithAppearance & { e
     <CodeSignInForm
       appearance={appearance}
       providers={providers}
-      initial={pending ? { step: "code", email: pending.email, error } : { step: "email", error }}
+      initial={pending ? { step: "code", email: pending.email, error } : { step: "email", error, notice }}
     />
   );
 }
@@ -88,7 +88,7 @@ export async function SignedOut({ children }: { children: React.ReactNode }) {
 export async function UserProfile({ appearance }: WithAppearance) {
   const user = await getUser();
   if (!user) return null;
-  let devices: DeviceInfo[] = [];
+  let devices: DeviceInfo[] | null = null;
   try {
     const { account } = await createSessionClient();
     const { sessions } = await account.listSessions();
@@ -96,14 +96,14 @@ export async function UserProfile({ appearance }: WithAppearance) {
       .sort((a, b) => Number(b.current) - Number(a.current) || b.$createdAt.localeCompare(a.$createdAt))
       .map((s) => ({
         id: s.$id,
-        label: [s.clientName, s.osName].filter(Boolean).join(" on ") || "Unknown device",
+        label: [[s.clientName, s.clientVersion?.split(".")[0]].filter(Boolean).join(" "), s.osName].filter(Boolean).join(" on ") || "Unknown device",
         // Sessions are created on the server, so Appwrite's location is the
-        // server's, not the visitor's. Only the browser and date are shown.
-        detail: `Signed in ${new Date(s.$createdAt).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" })}`,
+        // server's, not the visitor's. The browser formats the time locally.
+        signedInAt: s.$createdAt,
         current: s.current,
       }));
   } catch {
-    // Shown as an empty list; the rest of the page still works.
+    // null shows "couldn't load devices" with a retry; the rest of the page still works.
   }
   return (
     <UserProfileView

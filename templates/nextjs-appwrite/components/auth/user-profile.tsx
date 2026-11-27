@@ -1,7 +1,8 @@
 "use client";
 
 import Link from "next/link";
-import { useActionState, useEffect, useState, useTransition } from "react";
+import { useRouter } from "next/navigation";
+import { useActionState, useEffect, useRef, useState, useTransition } from "react";
 import { type AccountState, changePassword, deleteAccount, signOutDevices, updateName } from "@/lib/account";
 import { type Appearance, resolveAppearance } from "./appearance";
 import { Message } from "./card";
@@ -13,16 +14,21 @@ import { Field, PasswordField, Spinner, SubmitButton } from "./controls";
 export type DeviceInfo = {
   id: string;
   label: string;
-  detail: string;
+  /** ISO time; formatted in the browser so it shows the visitor's own time zone. */
+  signedInAt: string;
   current: boolean;
 };
+
+const signedIn = (iso: string) =>
+  `Signed in ${new Date(iso).toLocaleString(undefined, { day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" })}`;
 
 type Props = {
   appearance?: Appearance;
   name: string;
   email: string;
   passwordMode: boolean;
-  devices: DeviceInfo[];
+  /** null when the list could not be loaded. */
+  devices: DeviceInfo[] | null;
   backHref: string;
 };
 
@@ -51,11 +57,9 @@ function NameForm({ appearance, name }: { appearance?: Appearance; name: string 
   const [saved, setSaved] = useState(name);
   const { cls } = resolveAppearance(appearance);
   const changed = value.trim() !== saved.trim();
-  // A notice means the server saved it: that value is now the saved one.
+  // The server returns the name it stored; that is the saved one, whatever was typed since.
   useEffect(() => {
-    if (state.notice) setSaved(value);
-    // Only when a new answer arrives, not on every keystroke.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    if (state.name !== undefined) setSaved(state.name);
   }, [state]);
   return (
     <form action={action} className={cls("form")}>
@@ -63,7 +67,7 @@ function NameForm({ appearance, name }: { appearance?: Appearance; name: string 
         value={value} onChange={(e) => setValue(e.target.value)} />
       <Message appearance={appearance} error={state.error} notice={changed ? undefined : state.notice} />
       <div className="rp-section-actions">
-        <SubmitButton appearance={appearance} ready={changed}>Save</SubmitButton>
+        <SubmitButton appearance={appearance} ready={changed && value.trim().length > 0}>Save</SubmitButton>
       </div>
     </form>
   );
@@ -73,15 +77,24 @@ function PasswordForm({ appearance, email }: { appearance?: Appearance; email: s
   const [state, action] = useActionState(changePassword, {});
   const [current, setCurrent] = useState("");
   const [next, setNext] = useState("");
+  const form = useRef<HTMLFormElement>(null);
+  const router = useRouter();
   const { cls } = resolveAppearance(appearance);
-  // Clear both fields once the change went through.
   useEffect(() => {
-    if (!state.notice) return;
-    setCurrent("");
-    setNext("");
-  }, [state]);
+    if (state.error) {
+      // Wrong current password is the usual case: put the cursor back there.
+      const field = form.current?.querySelector<HTMLInputElement>('input[name="current"]');
+      field?.focus();
+      field?.select();
+    }
+    if (state.notice) {
+      setCurrent("");
+      setNext("");
+      router.refresh(); // other devices were signed out: reload the device list
+    }
+  }, [state, router]);
   return (
-    <form action={action} className={cls("form")}>
+    <form ref={form} action={action} className={cls("form")}>
       {/* Lets password managers know which account this password belongs to. */}
       <input type="email" name="username" autoComplete="username" value={email} readOnly hidden />
       <PasswordField appearance={appearance} label="Current password" name="current" required autoComplete="current-password"
@@ -97,27 +110,46 @@ function PasswordForm({ appearance, email }: { appearance?: Appearance; email: s
   );
 }
 
-function Devices({ appearance, devices }: { appearance?: Appearance; devices: DeviceInfo[] }) {
-  const [list, setList] = useState(devices);
+function Devices({ appearance, devices }: { appearance?: Appearance; devices: DeviceInfo[] | null }) {
+  const [list, setList] = useState(devices ?? []);
   const [busy, setBusy] = useState<string | null>(null);
   const [message, setMessage] = useState<AccountState>({});
   const [, startTransition] = useTransition();
+  const router = useRouter();
+  const listRef = useRef<HTMLUListElement>(null);
+  const statusRef = useRef<HTMLDivElement>(null);
   const { cls } = resolveAppearance(appearance);
   const others = list.filter((d) => !d.current);
+
+  if (devices === null) {
+    return (
+      <div className="rp-section-actions" style={{ justifyContent: "space-between" }}>
+        <Message appearance={appearance} error="Couldn't load your devices." />
+        <button type="button" className={cls("secondaryButton")} onClick={() => router.refresh()}>Try again</button>
+      </div>
+    );
+  }
 
   const run = (id?: string) => {
     setBusy(id ?? "all");
     startTransition(async () => {
       const result = await signOutDevices(id);
       setMessage(result);
-      if (!result.error) setList((l) => l.filter((d) => d.current || (id ? d.id !== id : false)));
       setBusy(null);
+      if (result.error) return;
+      const remaining = list.filter((d) => d.current || (id ? d.id !== id : false));
+      setList(remaining);
+      // Keep keyboard focus nearby: the next device's button, or the message.
+      requestAnimationFrame(() => {
+        const next = listRef.current?.querySelector<HTMLButtonElement>("button");
+        (next ?? statusRef.current)?.focus();
+      });
     });
   };
 
   return (
     <>
-      <ul className="rp-devices">
+      <ul ref={listRef} className="rp-devices">
         {list.map((device) => (
           <li key={device.id} className="rp-device">
             <div className="rp-device-text">
@@ -125,10 +157,11 @@ function Devices({ appearance, devices }: { appearance?: Appearance; devices: De
                 {device.label}
                 {device.current && <span className="rp-badge">This device</span>}
               </p>
-              <p className="rp-device-detail">{device.detail}</p>
+              <p className="rp-device-detail" suppressHydrationWarning>{signedIn(device.signedInAt)}</p>
             </div>
             {!device.current && (
               <button type="button" className={cls("link")} disabled={busy !== null} aria-busy={busy === device.id || undefined}
+                aria-label={`Sign out ${device.label}, ${signedIn(device.signedInAt).toLowerCase()}`}
                 onClick={() => run(device.id)}>
                 {busy === device.id ? <Spinner /> : "Sign out"}
               </button>
@@ -136,7 +169,9 @@ function Devices({ appearance, devices }: { appearance?: Appearance; devices: De
           </li>
         ))}
       </ul>
-      <Message appearance={appearance} error={message.error} notice={message.notice} />
+      <div ref={statusRef} tabIndex={-1} className="rp-status">
+        <Message appearance={appearance} error={message.error} notice={message.notice} />
+      </div>
       {others.length > 1 && (
         <div className="rp-section-actions">
           <button type="button" className={cls("secondaryButton")} disabled={busy !== null} aria-busy={busy === "all" || undefined}
@@ -153,11 +188,19 @@ function DeleteAccount({ appearance, email }: { appearance?: Appearance; email: 
   const [open, setOpen] = useState(false);
   const [state, action] = useActionState(deleteAccount, {});
   const [confirm, setConfirm] = useState("");
+  const opener = useRef<HTMLButtonElement>(null);
+  const returnFocus = useRef(false);
   const { cls } = resolveAppearance(appearance);
+  useEffect(() => {
+    if (!open && returnFocus.current) {
+      opener.current?.focus();
+      returnFocus.current = false;
+    }
+  }, [open]);
   if (!open) {
     return (
       <div className="rp-section-actions">
-        <button type="button" className={cls("secondaryButton", "rp-danger-button")} onClick={() => setOpen(true)}>
+        <button ref={opener} type="button" className={cls("secondaryButton", "rp-danger-button")} onClick={() => setOpen(true)}>
           Delete account
         </button>
       </div>
@@ -169,7 +212,7 @@ function DeleteAccount({ appearance, email }: { appearance?: Appearance; email: 
         autoCapitalize="none" spellCheck={false} value={confirm} onChange={(e) => setConfirm(e.target.value)} />
       <Message appearance={appearance} error={state.error} />
       <div className="rp-section-actions">
-        <button type="button" className={cls("link")} onClick={() => { setOpen(false); setConfirm(""); }}>
+        <button type="button" className={cls("link")} onClick={() => { returnFocus.current = true; setOpen(false); setConfirm(""); }}>
           Cancel
         </button>
         <SubmitButton appearance={appearance} className="rp-danger-solid"
@@ -203,7 +246,7 @@ export function UserProfileView({ appearance, name, email, passwordMode, devices
         )}
 
         <Section appearance={appearance} title="Devices" description="Where you are signed in right now.">
-          <Devices appearance={appearance} devices={devices} />
+          <Devices key={devices?.map((d) => d.id).join() ?? "error"} appearance={appearance} devices={devices} />
         </Section>
 
         <Section appearance={appearance} title="Delete account" danger

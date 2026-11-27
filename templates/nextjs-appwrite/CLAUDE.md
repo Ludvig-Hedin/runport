@@ -52,6 +52,12 @@ bun run dev     # the port is in .env.local as PORT when the platform started it
   `allowed()` too.
 - Data uses Appwrite TablesDB. Tables are declared in `lib/schema.ts`. To add a
   table or column, add it there and run `bun run setup`.
+- Mark a table `personal: true` in `lib/schema.ts` when each row belongs to
+  one person. Setup adds an indexed `owner` column (and fills it for older
+  rows that clearly have one owner). Set it on create with
+  `...(await ownerData())` from `lib/owner.ts`, never from form input.
+  Deleting an account on `/account` removes exactly that person's rows in
+  every personal table; rows in other tables are kept.
 - Tables have row security on. A row created with the session client belongs
   to that user only. For shared data, pass explicit `permissions` to `createRow`.
 - `app/items` is the example feature. Replace or rename it freely.
