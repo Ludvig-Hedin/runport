@@ -97,33 +97,44 @@ export async function signOutDevices(sessionId?: string): Promise<AccountState> 
 }
 
 const PAGE = 100;
-const MAX_ROUNDS = 1000; // 100,000 rows per table; anything bigger needs a job, not a click
+const MAX_PAGES = 1000; // 100,000 rows per table; anything bigger needs a job, not a click
 
-/** Deletes every row this person owns in one table, page by page, until none are left. */
-async function deleteOwnedRows(tableId: string, userId: string): Promise<void> {
+type Row = { $id: string; $permissions: string[] } & Record<string, unknown>;
+
+/**
+ * A row is this person's only when both agree: the server-set owner column
+ * names them AND the row's own permissions name them. A row where the two
+ * disagree is left alone (never deleted, never blocks deletion).
+ */
+const isOwnRow = (row: Row, userId: string) =>
+  row[OWNER_COLUMN] === userId && row.$permissions.some((p) => p.includes(`"user:${userId}"`) || p.includes(`"user:${userId}/`));
+
+/** Walks every row whose owner column names this person, one page at a time. */
+async function* ownerRows(tableId: string, userId: string): AsyncGenerator<Row> {
   const { tables } = createAdminClient();
-  const mine = [Query.equal(OWNER_COLUMN, userId), Query.limit(PAGE)];
-  for (let round = 0; round < MAX_ROUNDS; round++) {
-    const { rows } = await tables.listRows({ databaseId: DATABASE_ID, tableId, queries: mine });
+  let cursor: string | undefined;
+  for (let page = 0; page < MAX_PAGES; page++) {
+    const queries = [Query.equal(OWNER_COLUMN, userId), Query.orderAsc("$id"), Query.limit(PAGE), ...(cursor ? [Query.cursorAfter(cursor)] : [])];
+    const { rows } = await tables.listRows({ databaseId: DATABASE_ID, tableId, queries });
     if (rows.length === 0) return;
-    // Re-check each row: the query already filters, this guards against surprises.
-    const own = rows.filter((row) => (row as unknown as Record<string, unknown>)[OWNER_COLUMN] === userId);
-    if (own.length !== rows.length) throw new Error(`Unexpected rows in ${tableId}`);
-    for (const row of own) await tables.deleteRow({ databaseId: DATABASE_ID, tableId, rowId: row.$id });
+    for (const row of rows) yield row as unknown as Row;
+    cursor = rows[rows.length - 1].$id;
   }
   throw new Error(`Too many rows in ${tableId} to delete in one go`);
 }
 
-async function ownedRowsLeft(userId: string): Promise<number> {
+/** Deletes every row this person owns in one table. Rows whose owner and permissions disagree are skipped. */
+async function deleteOwnedRows(tableId: string, userId: string): Promise<void> {
   const { tables } = createAdminClient();
+  const own: string[] = [];
+  for await (const row of ownerRows(tableId, userId)) if (isOwnRow(row, userId)) own.push(row.$id);
+  for (const rowId of own) await tables.deleteRow({ databaseId: DATABASE_ID, tableId, rowId });
+}
+
+async function ownedRowsLeft(userId: string): Promise<number> {
   let left = 0;
   for (const table of TABLES.filter((t) => t.personal)) {
-    const { total } = await tables.listRows({
-      databaseId: DATABASE_ID,
-      tableId: table.id,
-      queries: [Query.equal(OWNER_COLUMN, userId), Query.limit(1)],
-    });
-    left += total;
+    for await (const row of ownerRows(table.id, userId)) if (isOwnRow(row, userId)) left++;
   }
   return left;
 }
