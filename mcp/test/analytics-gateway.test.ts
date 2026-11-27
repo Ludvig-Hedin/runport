@@ -26,7 +26,7 @@ test("a site credential only submits events for that site, and no public path ex
   expect((await handle(event(a))).status).toBe(200);
   expect((await handle(event(b))).status).toBe(403);
   expect((await handle(event(a, "/runport/ingest", ""))).status).toBe(403);
-  for (const path of ["/api/send", "/api/send/", "/api/%73end", "/api/record", "/p/fixture", "/q/fixture", "/compat/api/send"]) {
+  for (const path of ["/api/send", "/api/send/", "/api/%73end", "/api/batch", "/api/batch/", "/api/record", "/p/fixture", "/q/fixture", "/compat/api/send"]) {
     expect((await handle(event(a, path))).status).toBe(404);
   }
   expect(calls).toEqual(["http://127.0.0.1:3001/api/send"]);
