@@ -6,6 +6,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { AppwriteAdmin } from "./appwrite-admin";
 import { config } from "./config";
+import { formMailSettings } from "./form-mail";
 import { readSecret } from "./keychain";
 import { loadRegistry } from "./registry";
 import { assertAppwriteId } from "./slug";
@@ -21,7 +22,8 @@ const admin = new AppwriteAdmin();
 async function railway(args: string[], input?: string): Promise<string> {
   const proc = Bun.spawn(["railway", ...args], { cwd: app!.folder, stdin: input ? new Blob([input]) : "ignore", stdout: "pipe", stderr: "pipe" });
   const [out, err, code] = await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text(), proc.exited]);
-  if (code !== 0) throw new Error(`railway ${args[0]} failed: ${err.trim() || out.trim()}`);
+  if (code !== 0) throw new Error(args[0] === "variables" ? "Railway could not read or set app variables." :
+    `railway ${args[0]} failed: ${err.trim() || out.trim()}`);
   return out;
 }
 
@@ -90,9 +92,11 @@ console.log("tables ready");
 
 // 4. App settings on Railway, then deploy the folder.
 // Telemetry off, so an idle app sends nothing out and Railway can put it to sleep.
+const mailUrl = process.env.PLATFORM_FORM_MAIL_URL ?? new URL("/runport-mail/form", config.endpoint).href;
+const formMail = await formMailSettings(slug, mailUrl, current.RUNPORT_FORM_OWNER_EMAIL);
 const analytics = await provisionAppAnalytics(app.folder, slug, domain);
 const { ANALYTICS_INGEST_TOKEN: ingestToken, ...analyticsPublicVars } = analytics.variables;
-const vars = { APPWRITE_ENDPOINT: config.endpoint, APPWRITE_PROJECT_ID: slug, APPWRITE_API_KEY: key, APP_URL: `https://${domain}`, PORT: String(app.port), NEXT_TELEMETRY_DISABLED: "1", ...analyticsPublicVars };
+const vars = { ...formMail, APPWRITE_ENDPOINT: config.endpoint, APPWRITE_PROJECT_ID: slug, APPWRITE_API_KEY: key, APP_URL: `https://${domain}`, PORT: String(app.port), NEXT_TELEMETRY_DISABLED: "1", ...analyticsPublicVars };
 await railway(["variables", "--service", "web", "--skip-deploys", ...Object.entries(vars).flatMap(([k, v]) => ["--set", `${k}=${v}`])]);
 if (ingestToken) {
   await railway(["variable", "set", "--service", "web", "--skip-deploys", "--stdin", "ANALYTICS_INGEST_TOKEN"], ingestToken)

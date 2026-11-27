@@ -7,13 +7,12 @@ import { UNLOCK_MAX_AGE, safeEqual, safeNextPath, unlockCookieName, unlockToken 
 // While the site is locked the proxy refuses every server action, so no
 // other action can be reached through the open /unlock page.
 
-// Railway can put the internal listener in request.url. Keep redirects
-// relative so the browser stays on the app's public origin.
-const redirect = (path: string) => new NextResponse(null, { status: 303, headers: { Location: path } });
+// A relative Location stays on the public origin behind a reverse proxy.
+const redirect = (location: string) => new NextResponse(null, { status: 303, headers: { Location: location } });
 
 const back = (next: string, error: string) => {
-  const search = new URLSearchParams({ next, error });
-  return redirect(`/unlock?${search}`);
+  const query = new URLSearchParams({ next, error });
+  return redirect(`/unlock?${query}`);
 };
 
 // A password and a return path fit easily; anything larger is not our form.

@@ -32,8 +32,11 @@ export function sitePassword(): string | null {
 }
 
 /** Only an open production deploy that opted in may be indexed. Previews never are. */
-export function indexingAllowed(): boolean {
-  const environment = process.env.RAILWAY_ENVIRONMENT_NAME;
-  const production = !environment || environment === "production";
-  return isOn("ALLOW_INDEXING") && production && !sitePassword();
+export function indexingAllowed(env: Record<string, string | undefined> = process.env): boolean {
+  const railway = env.RAILWAY_ENVIRONMENT_NAME;
+  const production = (!railway || railway === "production") &&
+    (!env.VERCEL_ENV || env.VERCEL_ENV === "production") &&
+    (!env.CONTEXT || env.CONTEXT === "production") &&
+    !env.RAILWAY_PR_NUMBER;
+  return env.ALLOW_INDEXING === "1" && production && !env.SITE_PASSWORD;
 }

@@ -1,13 +1,20 @@
 import { afterAll, beforeEach, describe, expect, test } from "bun:test";
+import { Database } from "bun:sqlite";
 import { createHmac } from "node:crypto";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import nodemailer, { type SendMailOptions } from "nodemailer";
 import type { Config } from "../src/config";
 import { DeliveryError, cloudflareDelivery, type Envelope } from "../src/deliver";
 import { appPassword, headerFrom } from "../src/identity";
 import { Limits, stockholmDay } from "../src/limits";
 import { createSmtpServer } from "../src/server";
+import { formMailHandler } from "../src/form-mail";
 
-const caps = (total: number, perApp: number, perAppNews = 100, newsShare = 1) => ({ total, perApp, perAppNews, newsShare });
+const caps = (total: number, perApp: number, perAppNews = 100, newsShare = 1) => ({
+  total, perApp, perAppNews, newsShare, perAppForm: 50, perHourForm: 10, formShare: 0.1,
+});
 
 describe("Limits", () => {
   test("counts recipients per app and in total", () => {
@@ -304,4 +311,95 @@ describe("cloudflareDelivery", () => {
       srv.stop();
     }
   });
+});
+
+describe("form mail HTTPS bridge", () => {
+  const owner = "owner@example.com";
+  const token = createHmac("sha256", config.masterKey).update(`form-mail:shop:${owner}`).digest("hex");
+  const handler = formMailHandler(config, {
+    reserve: (...args) => limits.reserve(...args), release: (...args) => limits.release(...args),
+  }, async (envelope) => {
+    delivered.push(envelope);
+    return 1;
+  }, () => {});
+  const sendForm = (to = owner, app = "shop", from = "shop@apps.example.com") =>
+    handler(new Request("https://runport.example/runport-mail/form", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${token}`, "X-Runport-App": app },
+      body: JSON.stringify({ from, to, subject: "New message", text: "Hello" }),
+    }));
+
+  beforeEach(() => {
+    limits = new Limits(":memory:", { ...config.caps, total: 100, perAppForm: 1 });
+    delivered = [];
+    failNext = false;
+    partial = null;
+  });
+
+  test("only sends to the one recipient and app bound to the token", async () => {
+    expect((await sendForm("visitor@example.com")).status).toBe(401);
+    expect((await sendForm(owner, "other", "other@apps.example.com")).status).toBe(401);
+    expect((await sendForm(owner, "shop", "other@apps.example.com")).status).toBe(400);
+    expect((await sendForm()).status).toBe(204);
+    expect(delivered).toEqual([{ from: "shop@apps.example.com", to: [owner] }]);
+  });
+
+  test("has an independent daily budget from SMTP account mail", async () => {
+    await send("shop", ["one@example.net", "two@example.net", "three@example.net"]);
+    expect((await sendForm()).status).toBe(204);
+    expect((await sendForm()).status).toBe(429);
+    expect(delivered).toHaveLength(2);
+  });
+});
+
+test("form mail leaves explicit login headroom and limits each app per hour", () => {
+  const limits = new Limits(":memory:", { ...caps(100, 20, 100, 0.7), perAppForm: 50, perHourForm: 2, formShare: 0.1 });
+  const now = new Date("2026-11-27T10:15:00Z");
+  expect(limits.reserve("app", "form", 2, now).ok).toBe(true);
+  expect(limits.reserve("app", "form", 1, now).ok).toBe(false);
+  expect(limits.reserve("app", "form", 2, new Date("2026-11-27T11:15:00Z")).ok).toBe(true);
+  expect(limits.reserve("app", "mail", 20, now).ok).toBe(true);
+  expect(limits.reserve("news", "news", 46, now).ok).toBe(true);
+  const headroom = new Limits(":memory:", caps(100, 30, 100, 0.7));
+  expect(headroom.reserve("news", "news", 69, now).ok).toBe(true);
+  expect(headroom.reserve("one", "form", 1, now).ok).toBe(true);
+  expect(headroom.reserve("two", "form", 1, now).ok).toBe(false);
+  expect(headroom.reserve("one", "mail", 30, now).ok).toBe(true);
+  expect(limits.reserve("other", "mail", 20, now).ok).toBe(true);
+});
+
+test("form daily caps are independent across apps and bound globally", () => {
+  const limits = new Limits(":memory:", { ...caps(100, 20), perAppForm: 4, perHourForm: 10, formShare: 0.1 });
+  expect(limits.reserve("first", "form", 4).ok).toBe(true);
+  expect(limits.reserve("first", "form", 1).ok).toBe(false);
+  expect(limits.reserve("second", "form", 4).ok).toBe(true);
+  expect(limits.reserve("third", "form", 2).ok).toBe(true);
+  expect(limits.reserve("fourth", "form", 1).ok).toBe(false);
+  expect(limits.reserve("first", "mail", 20).ok).toBe(true);
+});
+
+test("login and alert deliveries do not consume the newsletter and form budget", () => {
+  const folder = mkdtempSync(join(tmpdir(), "runport-mail-kinds-"));
+  try {
+    const path = join(folder, "limits.sqlite");
+    const limits = new Limits(path, caps(100, 30, 100, 0.7));
+    const now = new Date("2026-11-27T10:15:00Z");
+    expect(limits.reserve("newsletter", "news", 69, now).ok).toBe(true);
+
+    // Simulate the separate login and alert kinds on the same gateway database.
+    const db = new Database(path);
+    try {
+      const seed = db.query("INSERT INTO sent_by_kind (day, app, kind, recipients) VALUES (?, ?, ?, ?)");
+      seed.run(stockholmDay(now), "app", "login", 6);
+      seed.run(stockholmDay(now), "app", "alert", 6);
+    } finally {
+      db.close();
+    }
+
+    expect(limits.reserve("app", "form", 1, now).ok).toBe(true);
+    expect(limits.reserve("app", "form", 1, now).ok).toBe(false);
+    expect(limits.today(now).total).toBe(82);
+  } finally {
+    rmSync(folder, { recursive: true, force: true });
+  }
 });

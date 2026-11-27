@@ -1,5 +1,6 @@
 import { loadConfig } from "./config";
 import { cloudflareDelivery, sesDelivery, smtpDelivery } from "./deliver";
+import { formMailHandler } from "./form-mail";
 import { Limits } from "./limits";
 import { createSmtpServer, jsonLog } from "./server";
 
@@ -18,12 +19,14 @@ const smtp = createSmtpServer(config, limits, deliver);
 smtp.on("error", (error) => jsonLog({ result: "smtp-error", reason: error.message }));
 smtp.listen(config.smtpPort, () => jsonLog({ result: "listening", smtpPort: config.smtpPort, delivery: config.delivery, caps: config.caps }));
 
-// Health check and today's counts, for Docker and the admin. Not published
-// outside the internal network.
+// Only the authenticated form endpoint is forwarded by the public router.
+const sendFormMail = formMailHandler(config, limits, deliver);
 Bun.serve({
   port: config.httpPort,
+  maxRequestBodySize: 32 * 1024,
   fetch(req) {
     const { pathname } = new URL(req.url);
+    if (pathname === "/runport-mail/form") return sendFormMail(req);
     if (pathname === "/health") return new Response("ok");
     if (pathname === "/stats") return Response.json(limits.today());
     return new Response("Not found", { status: 404 });

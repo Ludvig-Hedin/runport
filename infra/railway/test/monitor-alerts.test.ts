@@ -53,6 +53,18 @@ test("HTTP 200 with zero sends leaves the incident retryable and never triggers 
   expect(subjects).toEqual(["Runport: Appwrite API is down", "Runport: Appwrite API is down", "Runport: Appwrite API is back"]);
 });
 
+test("only a confirmed recovery removes a delivered incident", async () => {
+  const check = "Runport Git";
+  const state: MonitorState = { [check]: { failingSince: 1, lastDeliveredAt: 2 } };
+  for (const response of [new Response("invalid JSON"), Response.json({ sent: 1, failed: 1 })]) {
+    await expect(updateIncident(state, check, null, 3, Infinity, () => requireConfirmedDelivery(response)))
+      .rejects.toThrow("confirmed");
+    expect(state[check]).toEqual({ failingSince: 1, lastDeliveredAt: 2 });
+  }
+  await updateIncident(state, check, null, 4, Infinity, () => requireConfirmedDelivery(Response.json({ sent: 1, failed: 0 })));
+  expect(state).toEqual({});
+});
+
 test("a log-only incident records no notification or recovery email", async () => {
   const state: MonitorState = {};
   const sent: string[] = [];

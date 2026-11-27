@@ -34,6 +34,7 @@ Vercel, Clerk, Convex or Resend.
 | Visitor analytics | Cookieless pageviews and custom events for production apps, using self-hosted Umami |
 | Backups and outage alerts | Nightly Appwrite, Git and analytics backups kept for 14 days. Health checks run every five minutes. |
 | Own addresses (`*.runport.app`) | Admin live at admin.runport.app; app addresses via custom-domain.ts |
+| Contact forms and SEO | Starter includes spam checks, owner email, sitemaps and social cards |
 | Newsletters | Not yet: Cloudflare is for transactional mail |
 | Own admin panel | Not started; Appwrite's admin is used meanwhile |
 
