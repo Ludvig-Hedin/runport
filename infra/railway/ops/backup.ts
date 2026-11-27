@@ -57,15 +57,17 @@ async function prune(kind: ArchiveKind): Promise<void> {
   for (const key of expiredArchives(keys, kind, cutoff, archiveKey(kind, day))) await bucket.delete(key);
 }
 
-const dir = await mkdtemp(join(tmpdir(), "runport-backup-"));
+let dir: string | undefined;
 try {
   if (!Number.isInteger(KEEP_DAYS) || KEEP_DAYS < 1) throw new Error("KEEP_DAYS must be a positive integer.");
+  const workDir = await mkdtemp(join(tmpdir(), "runport-backup-"));
+  dir = workDir;
   const jobs: [ArchiveKind, () => Promise<void>][] = [
-    ["appwrite", () => backupDatabase(dir, "appwrite")],
-    ["git", () => backupGit(dir)],
+    ["appwrite", () => backupDatabase(workDir, "appwrite")],
+    ["git", () => backupGit(workDir)],
   ];
   const analyticsDatabase = process.env.ANALYTICS_DATABASE;
-  if (analyticsDatabase) jobs.push(["analytics", () => backupDatabase(dir, "analytics", analyticsDatabase)]);
+  if (analyticsDatabase) jobs.push(["analytics", () => backupDatabase(workDir, "analytics", analyticsDatabase)]);
   const results = await Promise.allSettled(jobs.map(([kind, upload]) => finishArchive(upload, () => prune(kind))));
   const failures = jobs.flatMap(([kind], i) => {
     const result = results[i];
@@ -77,5 +79,5 @@ try {
   await alertOwner("Runport: nightly backup failed", `Backup for ${day} failed.\n\n${(error as Error).message}\n`).catch(() => {});
   process.exitCode = 1;
 } finally {
-  await rm(dir, { recursive: true, force: true });
+  if (dir) await rm(dir, { recursive: true, force: true });
 }

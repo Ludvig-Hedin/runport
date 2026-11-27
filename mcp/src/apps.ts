@@ -107,7 +107,15 @@ async function writeMcpConfig(folder: string, env: Record<string, string>): Prom
   await writeFile(join(folder, ".mcp.json"), `${JSON.stringify(mcp, null, 2)}\n`, { mode: 0o600 });
 }
 
-export async function createApp(input: CreateAppInput): Promise<CreateAppResult> {
+let creating = Promise.resolve();
+
+export function createApp(input: CreateAppInput): Promise<CreateAppResult> {
+  const result = creating.then(() => provisionApp(input));
+  creating = result.then(() => {}, () => {});
+  return result;
+}
+
+async function provisionApp(input: CreateAppInput): Promise<CreateAppResult> {
   const slug = toSlug(input.name);
   const steps: string[] = [];
   const registry = await loadRegistry();
