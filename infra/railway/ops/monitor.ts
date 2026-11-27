@@ -18,8 +18,8 @@ async function ok(url: string): Promise<string | null> {
   }
 }
 
-async function backupFresh(): Promise<string | null> {
-  const listed = await bucket.list({ prefix: "backups/" });
+async function backupFresh(name: string): Promise<string | null> {
+  const listed = await bucket.list({ prefix: `backups/${name}-` });
   const newest = (listed.contents ?? []).map((o) => Date.parse(String(o.lastModified))).sort().at(-1);
   if (!newest) return "no backup found";
   const hours = (Date.now() - newest) / 3_600_000;
@@ -29,8 +29,18 @@ async function backupFresh(): Promise<string | null> {
 const checks: Record<string, () => Promise<string | null>> = {
   "Appwrite API": () => ok("http://appwrite.railway.internal/v1/health/version"),
   "Mail gateway": () => ok("http://mail-gateway.railway.internal:8080/health"),
-  "Nightly backup": backupFresh,
+  "Nightly backup": () => backupFresh("appwrite"),
 };
+
+const analyticsHealthUrl = process.env.ANALYTICS_HEALTH_URL;
+if (analyticsHealthUrl) {
+  const results = await Promise.allSettled([ok(analyticsHealthUrl), backupFresh("analytics")]);
+  for (const [index, result] of results.entries()) {
+    const check = index === 0 ? "Analytics service" : "Analytics backup";
+    const problem = result.status === "fulfilled" ? result.value : String(result.reason);
+    console[problem ? "error" : "log"](JSON.stringify({ check, result: problem ? "failing" : "ok", problem }));
+  }
+}
 
 const stateFile = bucket.file(STATE_KEY);
 const state: State = (await stateFile.exists()) ? await stateFile.json() : {};

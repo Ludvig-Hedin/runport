@@ -17,6 +17,7 @@ as npm packages, under their own licenses:
   infra/appwrite/console-theme changes colours in a copy built on your own
   machine for your own use. Runport never publishes or deploys that image.
 - Mailpit (https://github.com/axllent/mailpit), MIT. Local test inbox only.
+- Umami (https://github.com/umami-software/umami), MIT. Visitor analytics.
 - smtp-server and nodemailer (https://nodemailer.com), MIT-0.
 - AWS SDK for JavaScript v3 (https://github.com/aws/aws-sdk-js-v3), Apache-2.0.
 - Model Context Protocol TypeScript SDK, MIT. zod, MIT.

@@ -1,5 +1,6 @@
 import { readFileSync } from "node:fs";
 import { bucket, defineRailway, image, project, ref, service, volume } from "railway/iac";
+import { analyticsDatabase, analyticsService } from "./analytics.ts";
 
 // Runport on Railway: Appwrite 2.6.1 from its official images, the mail
 // gateway (delivering through Cloudflare, infra/cloudflare-mail) and one
@@ -127,6 +128,7 @@ export default defineRailway(() => {
     replicas: REGION,
     healthcheck: "/health",
   });
+  const analytics = analyticsService(REGION, secret("SD_ANALYTICS_DB_PASS"), secret("SD_ANALYTICS_APP_SECRET"));
 
   // Scheduled jobs from infra/railway/ops (deployed with `railway up`).
   const opsEnv = {
@@ -149,6 +151,7 @@ export default defineRailway(() => {
       PGUSER: "user",
       PGPASSWORD: secret("SD_DB_PASS"),
       PGDATABASE: "appwrite",
+      ANALYTICS_DATABASE: analyticsDatabase,
       KEEP_DAYS: "14",
     },
   });
@@ -156,7 +159,7 @@ export default defineRailway(() => {
     replicas: REGION,
     start: "bun monitor.ts",
     deploy: { cronSchedule: "*/5 * * * *", restartPolicyType: "NEVER" },
-    env: { ...opsEnv, ALERT_EVERY_HOURS: "3" },
+    env: { ...opsEnv, ALERT_EVERY_HOURS: "3", ANALYTICS_HEALTH_URL: "http://analytics.railway.internal:3000/api/heartbeat" },
   });
 
   return project("runport", {
@@ -179,6 +182,7 @@ export default defineRailway(() => {
       gatewayData,
       mailGateway,
       router,
+      analytics,
       backup,
       monitor,
     ],

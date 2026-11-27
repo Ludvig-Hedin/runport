@@ -7,11 +7,13 @@ import { UNLOCK_MAX_AGE, safeEqual, safeNextPath, unlockCookieName, unlockToken 
 // While the site is locked the proxy refuses every server action, so no
 // other action can be reached through the open /unlock page.
 
-const back = (request: NextRequest, next: string, error?: string) => {
-  const url = new URL("/unlock", request.url);
-  url.searchParams.set("next", next);
-  if (error) url.searchParams.set("error", error);
-  return NextResponse.redirect(url, 303);
+// Railway can put the internal listener in request.url. Keep redirects
+// relative so the browser stays on the app's public origin.
+const redirect = (path: string) => new NextResponse(null, { status: 303, headers: { Location: path } });
+
+const back = (next: string, error: string) => {
+  const search = new URLSearchParams({ next, error });
+  return redirect(`/unlock?${search}`);
 };
 
 // A password and a return path fit easily; anything larger is not our form.
@@ -24,19 +26,19 @@ export async function POST(request: NextRequest) {
     return new NextResponse("Bad request", { status: 400 });
   }
   // Counted before reading the body, so floods cost as little as possible.
-  if (!(await allowed("unlock"))) return back(request, "/", "limited");
+  if (!(await allowed("unlock"))) return back("/", "limited");
   const form = new URLSearchParams((await request.text()).slice(0, MAX_BODY));
   const next = safeNextPath(form.get("next"));
   const expected = sitePassword();
-  if (!expected) return NextResponse.redirect(new URL(next, request.url), 303);
+  if (!expected) return redirect(next);
   const password = form.get("password") ?? "";
-  if (!password) return back(request, next, "empty");
+  if (!password) return back(next, "empty");
   // Comparing the two HMACs keeps the check constant-time for any password length.
-  if (!take(...UNLOCK_FAILURES)) return back(request, next, "limited");
+  if (!take(...UNLOCK_FAILURES)) return back(next, "limited");
   const [given, wanted] = await Promise.all([unlockToken(password), unlockToken(expected)]);
-  if (!safeEqual(given, wanted)) return back(request, next, "wrong");
+  if (!safeEqual(given, wanted)) return back(next, "wrong");
   release(UNLOCK_FAILURES[0]);
-  const response = NextResponse.redirect(new URL(next, request.url), 303);
+  const response = redirect(next);
   response.cookies.set(unlockCookieName(), wanted, {
     path: "/",
     httpOnly: true,

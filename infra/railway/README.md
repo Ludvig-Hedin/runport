@@ -33,6 +33,27 @@ else the admin. The admin sleeps when idle; the router waits for it to wake.
 - The encryption key (`openssl-key`) makes stored data readable. Losing it
   loses the data. Back it up outside this Mac.
 
+## Visitor analytics
+
+The private `analytics` service runs Umami. It uses its own database and
+login on the existing PostgreSQL server. The nightly job saves a separate
+14-day dump under `backups/analytics-*.dump`. The five-minute monitor logs
+analytics health and backup freshness.
+
+For a first install, check `./apply.sh plan` and take a verified Appwrite
+backup. On the linked Runport project, run `./setup-analytics.sh database`
+before applying the configuration. Wait for the analytics deployment to be
+healthy while it is still private, then run `./setup-analytics.sh admin` to
+replace Umami's default password. Use an authenticated health check before
+adding `analytics.runport.app` through `mcp/src/custom-domain.ts`. Verify the
+DNS token and put the CNAME in place first. Umami's admin password lives in
+Keychain `runport-prod` / `analytics-admin-password`.
+
+Deploy the `ops` directory to `backup` and `monitor` to activate the new checks.
+The online Runport tools provision one analytics site per app. Other Runport
+installations can set `PLATFORM_ANALYTICS_URL` and store their Umami admin
+password in the configured Keychain service under `analytics-admin-password`.
+
 Put an app online: `PLATFORM_KEYCHAIN_SERVICE=runport-prod
 PLATFORM_APPWRITE_ENDPOINT=https://admin.runport.app/v1
 bun mcp/src/deploy-app.ts <slug>`. Each app gets its own Railway project, so

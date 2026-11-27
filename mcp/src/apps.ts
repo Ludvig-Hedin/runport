@@ -7,6 +7,7 @@ import { run, succeeds } from "./exec";
 import { createPrivateRepo } from "./github";
 import { type AppRecord, loadRegistry, nextFreePort, removeApp, upsertApp } from "./registry";
 import { assertAppwriteId, toSlug } from "./slug";
+import { ensureAnalytics } from "./analytics";
 
 // Every step checks whether its result already exists, so calling create_app
 // again after a failure resumes where it stopped instead of duplicating.
@@ -147,6 +148,11 @@ export async function createApp(input: CreateAppInput): Promise<CreateAppResult>
     steps.push(input.apiKey ? "saved the given server key" : "created a server key");
   }
   await writeMcpConfig(folder, env);
+  const analytics = await ensureAnalytics(slug);
+  if (analytics.ANALYTICS_SITE_ID && (env.ANALYTICS_SITE_ID !== analytics.ANALYTICS_SITE_ID || env.ANALYTICS_URL !== analytics.ANALYTICS_URL)) {
+    await writeEnv(envFile, { ...env, ...analytics });
+    steps.push("configured visitor analytics");
+  }
 
   if (!input.projectId) {
     await ensurePlatform(projectId, "localhost");

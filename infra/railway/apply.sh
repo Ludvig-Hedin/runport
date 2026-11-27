@@ -18,6 +18,8 @@ ensure() {
 export SD_OPENSSL_KEY=$(ensure openssl-key 64)
 export SD_DB_PASS=$(ensure db-pass)
 export SD_DB_ROOT_PASS=$(ensure db-root-pass)
+export SD_ANALYTICS_DB_PASS=$(ensure analytics-db-password)
+export SD_ANALYTICS_APP_SECRET=$(ensure analytics-app-secret)
 export SD_EXECUTOR_SECRET=$(ensure executor-secret)
 export SD_JOBS_SECRET=$(ensure jobs-secret)
 export SD_GEO_SECRET=$(ensure geo-secret 64)

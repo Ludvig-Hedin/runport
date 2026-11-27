@@ -30,6 +30,7 @@ Vercel, Clerk, Convex or Resend.
 | Mail gateway with caps, local test inbox | Works locally, 31 tests |
 | Mail delivery (Cloudflare) | Works online for login codes and other app mail |
 | Hosting online (Railway) | Appwrite, mail gateway and one app online, tested end to end |
+| Visitor analytics | Cookieless pageviews and custom events for production apps, using self-hosted Umami |
 | Backups and outage alerts | Nightly database backup kept 14 days; email alerts every 5 minutes |
 | Own addresses (`*.runport.app`) | Admin live at admin.runport.app; app addresses via custom-domain.ts |
 | Newsletters | Not yet: Cloudflare is for transactional mail |
