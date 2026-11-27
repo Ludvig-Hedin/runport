@@ -14,11 +14,12 @@ test("deploy uploads only a published commit to the named production service", (
   };
   const deploy = (...args: string[]) => run("bash", "infra/railway/apply.sh", ...args);
   try {
-    for (const directory of ["bin", "infra/railway/ops", "infra/mail-gateway"]) {
+    for (const directory of ["bin", "infra/railway/ops", "infra/railway/router", "infra/mail-gateway"]) {
       mkdirSync(join(cwd, directory), { recursive: true });
     }
     copyFileSync(new URL("../apply.sh", import.meta.url), join(cwd, "infra/railway/apply.sh"));
     writeFileSync(join(cwd, "infra/railway/ops/source.txt"), "committed-ops\n");
+    writeFileSync(join(cwd, "infra/railway/router/source.txt"), "committed-router\n");
     writeFileSync(join(cwd, "infra/mail-gateway/source.txt"), "committed-gateway\n");
     writeFileSync(join(cwd, "bin/railway"), `#!/bin/bash
 set -eu
@@ -38,6 +39,7 @@ printf '%s\\n' "${"$"}{@:3}"
 
     for (const [command, service, source] of [
       ["deploy-gateway", "mail-gateway", "gateway"],
+      ["deploy-router", "router", "router"],
       ["deploy-monitor", "monitor", "ops"],
       ["deploy-backup", "backup", "ops"],
     ]) {

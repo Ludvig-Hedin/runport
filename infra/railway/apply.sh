@@ -8,11 +8,12 @@ SERVICE=runport-prod
 
 deploy_main_source() (
   if [ "$#" -ne 1 ]; then
-    echo "usage: $0 deploy-gateway|deploy-monitor|deploy-backup" >&2
+    echo "usage: $0 deploy-gateway|deploy-router|deploy-monitor|deploy-backup" >&2
     exit 64
   fi
   case "$1" in
     deploy-gateway) service=mail-gateway; source_path=infra/mail-gateway ;;
+    deploy-router) service=router; source_path=infra/railway/router ;;
     deploy-monitor) service=monitor; source_path=infra/railway/ops ;;
     deploy-backup) service=backup; source_path=infra/railway/ops ;;
     *) exit 64 ;;
@@ -35,7 +36,7 @@ deploy_main_source() (
 )
 
 case "${1:-plan}" in
-  deploy-gateway|deploy-monitor|deploy-backup) deploy_main_source "$@"; exit ;;
+  deploy-gateway|deploy-router|deploy-monitor|deploy-backup) deploy_main_source "$@"; exit ;;
 esac
 
 get() { security find-generic-password -s "$SERVICE" -a "$1" -w 2>/dev/null; }
@@ -97,5 +98,5 @@ case "${1:-plan}" in
     ;;
   deploy-git) railway up git --path-as-root --service git --detach ;;
   deploy-analytics) railway up analytics --path-as-root --service analytics --detach ;;
-  *) echo "usage: $0 plan|apply|apply-analytics|apply-app-alerts|deploy-git|deploy-analytics|deploy-gateway|deploy-backup|deploy-monitor" >&2; exit 64 ;;
+  *) echo "usage: $0 plan|apply|apply-analytics|apply-app-alerts|deploy-git|deploy-analytics|deploy-gateway|deploy-router|deploy-backup|deploy-monitor" >&2; exit 64 ;;
 esac
