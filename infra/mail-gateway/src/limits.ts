@@ -4,12 +4,10 @@ import { Database } from "bun:sqlite";
 // costs money and what a spammer would inflate. Days follow Stockholm time so
 // the cap resets at local midnight.
 //
-// Two kinds of mail: "mail" (login codes, receipts, anything one person
-// triggers) and "news" (newsletters and other bulk sends). News has its own
-// per-app cap and may only fill part of the total, so a big send can never
-// use up the room login codes need.
+// Login mail has reserved capacity. Bulk mail and app alerts each have
+// their own budgets and share the account-wide cap.
 
-export type Kind = "mail" | "news" | "form";
+export type Kind = "mail" | "news" | "form" | "login" | "alert";
 export type Caps = {
   total: number;
   perApp: number;
@@ -18,7 +16,11 @@ export type Caps = {
   perAppForm: number;
   perHourForm: number;
   formShare: number;
+  loginReserve?: number;
+  alertTotal?: number;
+  alertPerApp?: number;
 };
+type MailCounts = { mail: number; news: number; form?: number; login?: number; alert?: number };
 
 export type Reservation = { ok: true } | { ok: false; reason: string };
 
@@ -47,33 +49,48 @@ export class Limits {
   reserve(app: string, kind: Kind, recipients: number, now = new Date()): Reservation {
     const day = stockholmDay(now);
     return this.db.transaction((): Reservation => {
-      const all = this.db.query("SELECT COALESCE(SUM(recipients), 0) AS n FROM sent_by_kind WHERE day = ?").get(day) as { n: number };
+      const all = this.db.query<{ n: number; login: number; alerts: number; automation: number; forms: number }, [string]>(`
+        SELECT COALESCE(SUM(recipients), 0) AS n,
+        COALESCE(SUM(CASE WHEN kind = 'login' THEN recipients ELSE 0 END), 0) AS login,
+        COALESCE(SUM(CASE WHEN kind = 'alert' THEN recipients ELSE 0 END), 0) AS alerts,
+        COALESCE(SUM(CASE WHEN kind IN ('news', 'form') THEN recipients ELSE 0 END), 0) AS automation,
+        COALESCE(SUM(CASE WHEN kind = 'form' THEN recipients ELSE 0 END), 0) AS forms
+        FROM sent_by_kind WHERE day = ?
+      `).get(day)!;
       const mine = this.db.query("SELECT recipients AS n FROM sent_by_kind WHERE day = ? AND app = ? AND kind = ?").get(day, app, kind) as
         | { n: number }
         | null;
-      const totalCap = kind === "news" ? Math.floor(this.caps.total * this.caps.newsShare) : this.caps.total;
+      const totalCap = this.caps.total;
       if (all.n + recipients > totalCap) {
         return {
           ok: false,
-          reason: kind === "news" ? `newsletters may use at most ${totalCap} of today's ${this.caps.total} emails` : `daily limit of ${totalCap} emails for all apps reached`,
+          reason: `daily limit of ${totalCap} emails for all apps reached`,
         };
       }
+      const loginReserve = Math.min(this.caps.total, this.caps.loginReserve ?? 0);
+      if (kind !== "login" && all.n - all.login + recipients > this.caps.total - loginReserve) {
+        return { ok: false, reason: "remaining mail quota is reserved for account verification and login" };
+      }
+      if (kind === "alert" && all.alerts + recipients > (this.caps.alertTotal ?? 30)) {
+        return { ok: false, reason: "daily limit for app alerts reached" };
+      }
       if (kind === "news" || kind === "form") {
-        const automation = this.db.query("SELECT COALESCE(SUM(recipients), 0) AS n FROM sent_by_kind WHERE day = ? AND kind IN ('news', 'form')").get(day) as { n: number };
         const automationCap = Math.floor(this.caps.total * Math.min(this.caps.newsShare, 0.7));
-        if (automation.n + recipients > automationCap) {
+        if (all.automation + recipients > automationCap) {
           return { ok: false, reason: "daily automation budget reached; capacity reserved for account mail" };
         }
       }
-      const appCap = { mail: this.caps.perApp, news: this.caps.perAppNews, form: this.caps.perAppForm }[kind];
+      const appCap = {
+        mail: this.caps.perApp, login: this.caps.perApp, news: this.caps.perAppNews,
+        form: this.caps.perAppForm, alert: this.caps.alertPerApp ?? 4,
+      }[kind];
       if ((mine?.n ?? 0) + recipients > appCap) {
-        const label = { mail: "", news: "newsletter ", form: "form " }[kind];
+        const label = { mail: "", news: "newsletter ", form: "form ", alert: "alert ", login: "login " }[kind];
         return { ok: false, reason: `daily limit of ${appCap} ${label}emails for ${app} reached` };
       }
       if (kind === "form") {
-        const daily = this.db.query("SELECT COALESCE(SUM(recipients), 0) AS n FROM sent_by_kind WHERE day = ? AND kind = 'form'").get(day) as { n: number };
         const cap = Math.floor(this.caps.total * this.caps.formShare);
-        if (daily.n + recipients > cap) return { ok: false, reason: `daily limit of ${cap} form emails for all apps reached` };
+        if (all.forms + recipients > cap) return { ok: false, reason: `daily limit of ${cap} form emails for all apps reached` };
         const hour = hourBucket(now);
         const hourly = this.db.query("SELECT recipients AS n FROM sent_by_kind WHERE day = ? AND app = ? AND kind = 'form'").get(hour, app) as { n: number } | null;
         if ((hourly?.n ?? 0) + recipients > this.caps.perHourForm) {
@@ -103,10 +120,10 @@ export class Limits {
     })();
   }
 
-  today(now = new Date()): { day: string; total: number; caps: Caps; apps: Record<string, { mail: number; news: number; form?: number }> } {
+  today(now = new Date()): { day: string; total: number; caps: Caps; apps: Record<string, MailCounts> } {
     const day = stockholmDay(now);
     const rows = this.db.query("SELECT app, kind, recipients FROM sent_by_kind WHERE day = ?").all(day) as { app: string; kind: Kind; recipients: number }[];
-    const apps: Record<string, { mail: number; news: number; form?: number }> = {};
+    const apps: Record<string, MailCounts> = {};
     for (const r of rows) (apps[r.app] ??= { mail: 0, news: 0 })[r.kind] = r.recipients;
     return { day, total: rows.reduce((sum, r) => sum + r.recipients, 0), caps: this.caps, apps };
   }

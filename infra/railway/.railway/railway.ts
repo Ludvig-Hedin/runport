@@ -13,6 +13,7 @@ const REGION_ID = "europe-west4-drams3a"; // Amsterdam
 const REGION = { [REGION_ID]: 1 };
 /** Matches what Railway created, so plans stay clean. */
 const DISK = { region: REGION_ID, sizeMB: 50000 };
+const OWNER_ALERT_ADDRESS = "ludvig@ludvighedin.com";
 
 const secret = (name: string): string => {
   const value = process.env[name];
@@ -31,6 +32,12 @@ const baseEnv = (): Record<string, string> =>
 
 export default defineRailway(() => {
   const domain = secret("SD_PUBLIC_DOMAIN");
+  const appAlertMonitorToken = process.env.SD_APP_ALERT_RAILWAY_TOKEN;
+  const appAlertMonitorEnv: Record<string, string> = {};
+  if (appAlertMonitorToken) {
+    appAlertMonitorEnv.RAILWAY_MONITOR_TOKEN = appAlertMonitorToken;
+    appAlertMonitorEnv.RUNPORT_ALERT_MONITOR_KEY = secret("SD_APP_ALERT_MONITOR_KEY");
+  }
   const files = bucket("appwrite-files", { region: "ams" });
 
   const appwriteEnv = {
@@ -119,6 +126,7 @@ export default defineRailway(() => {
       MAIL_APP_NEWS_DAILY_LIMIT: "500",
       MAIL_NEWS_SHARE_PERCENT: "70",
       SENDER_DOMAINS: "runport.app,apps.ludvighedin.com",
+      ...(appAlertMonitorToken ? { ALERT_TO: OWNER_ALERT_ADDRESS } : {}),
     },
   });
 
@@ -166,7 +174,7 @@ export default defineRailway(() => {
     S3_REGION: ref(files, "REGION"),
     CLOUDFLARE_MAIL_URL: "https://runport-mail.ludvighedin15.workers.dev/",
     CLOUDFLARE_MAIL_TOKEN: secret("SD_CF_MAIL_TOKEN"),
-    ALERT_TO: "ludvig@ludvighedin.com",
+    ALERT_TO: OWNER_ALERT_ADDRESS,
   };
   const backup = service("backup", {
     replicas: REGION,
@@ -188,7 +196,7 @@ export default defineRailway(() => {
     replicas: REGION,
     start: "bun monitor.ts",
     deploy: { cronSchedule: "*/5 * * * *", restartPolicyType: "NEVER" },
-    env: { ...opsEnv, ALERT_EVERY_HOURS: "3", ANALYTICS_HEALTH_URL: "https://analytics.runport.app/runport/ingest", GIT_HEALTH_URL: "https://git.runport.app/api/healthz" },
+    env: { ...opsEnv, ...appAlertMonitorEnv, ALERT_EVERY_HOURS: "3", ANALYTICS_HEALTH_URL: "https://analytics.runport.app/runport/ingest", GIT_HEALTH_URL: "https://git.runport.app/api/healthz" },
   });
 
   return project("runport", {

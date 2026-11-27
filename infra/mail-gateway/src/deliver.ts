@@ -11,16 +11,34 @@ export type Envelope = { from: string; to: string[] };
 /** Resolves with how many recipients got the message. */
 export type Deliver = (envelope: Envelope, raw: Buffer) => Promise<number>;
 
-export function sesDelivery(region: string): Deliver {
-  const client = new SESv2Client({ region });
+export function sesDelivery(
+  region: string,
+  client: { send(command: SendEmailCommand, options: { abortSignal: AbortSignal }): Promise<unknown> } =
+    new SESv2Client({ region, maxAttempts: 1 }),
+): Deliver {
   return async (envelope, raw) => {
-    await client.send(
-      new SendEmailCommand({
-        FromEmailAddress: envelope.from,
-        Destination: { ToAddresses: envelope.to },
-        Content: { Raw: { Data: raw } },
-      }),
-    );
+    try {
+      await client.send(
+        new SendEmailCommand({
+          FromEmailAddress: envelope.from,
+          Destination: { ToAddresses: envelope.to },
+          Content: { Raw: { Data: raw } },
+        }),
+        { abortSignal: AbortSignal.timeout(8000) },
+      );
+    } catch (error) {
+      const response = error as { name?: string; $metadata?: { httpStatusCode?: number } } | null;
+      const code = response?.$metadata?.httpStatusCode;
+      if (code === 429 || /^(?:TooManyRequestsException|ThrottlingException)$/.test(response?.name ?? "")) {
+        throw new DeliveryError("SES throttled the message", true);
+      }
+      if (code === 408 || (code && code >= 500)) {
+        // SES may have accepted the message before a timeout or server error.
+        throw new DeliveryError("SES delivery outcome is unknown", true, false);
+      }
+      if (code && code >= 400) throw new DeliveryError(`SES refused with ${code}`, false);
+      throw error;
+    }
     return envelope.to.length;
   };
 }
@@ -28,7 +46,13 @@ export function sesDelivery(region: string): Deliver {
 export function smtpDelivery(host: string, port: number): Deliver {
   const transport = nodemailer.createTransport({ host, port, secure: false, ignoreTLS: true });
   return async (envelope, raw) => {
-    await transport.sendMail({ envelope, raw });
+    try {
+      await transport.sendMail({ envelope, raw });
+    } catch (error) {
+      const code = (error as { responseCode?: number })?.responseCode;
+      if (code && code >= 400 && code < 600) throw new DeliveryError(`SMTP refused with ${code}`, code < 500);
+      throw error;
+    }
     return envelope.to.length;
   };
 }
@@ -38,17 +62,33 @@ export class DeliveryError extends Error {
     message: string,
     /** False when retrying cannot help, for example a refused recipient. */
     readonly retry: boolean,
+    readonly definite = true,
   ) {
     super(message);
   }
 }
 
-const RETRYABLE = /RATE_LIMIT|DAILY_LIMIT|INTERNAL|DELIVERY_FAILED/;
+const permanentWorkerRefusals = new Set([
+  "E_RECIPIENT_SUPPRESSED", "E_RECIPIENT_NOT_ALLOWED", "E_RECIPIENT_PLAN_RESTRICTED",
+  "E_SENDER_NOT_VERIFIED", "E_SENDER_DOMAIN_NOT_AVAILABLE", "E_SENDER_DOMAIN_NOT_CONFIGURED",
+  "E_ACCOUNT_SUSPENDED", "E_FIELD_MISSING", "E_CONTENT_TOO_LARGE", "E_TOO_MANY_ATTACHMENTS", "E_TOO_MANY_RECIPIENTS",
+  "E_HEADER_NOT_ALLOWED", "E_HEADER_USE_API_FIELD", "E_HEADER_VALUE_INVALID", "E_HEADER_VALUE_TOO_LONG",
+  "E_HEADER_NAME_INVALID", "E_HEADERS_TOO_LARGE", "E_HEADERS_TOO_MANY",
+]);
+const retryableWorkerRefusals = new Set([
+  "E_RATE_LIMIT_EXCEEDED", "E_DAILY_LIMIT_EXCEEDED", "E_INTERNAL", "E_INTERNAL_SERVER_ERROR",
+  "E_UNKNOWN", "E_DELIVERY_FAILED", "E_EMAIL_SENDING_NOT_READY",
+]);
+
+function isKnownWorkerRefusal(code: unknown): code is string {
+  return typeof code === "string" && (permanentWorkerRefusals.has(code) || retryableWorkerRefusals.has(code));
+}
 
 export function cloudflareDelivery(url: string, token: string): Deliver {
   return async (envelope, raw) => {
     const res = await fetch(url, {
       method: "POST",
+      signal: AbortSignal.timeout(8000),
       headers: {
         Authorization: `Bearer ${token}`,
         "X-Mail-From": envelope.from,
@@ -59,9 +99,23 @@ export function cloudflareDelivery(url: string, token: string): Deliver {
       body: new Uint8Array(raw),
     });
     // Status only in errors: the body could echo addresses.
-    if (!res.ok) throw new DeliveryError(`Cloudflare answered ${res.status}`, res.status >= 500 || res.status === 429);
-    const result = (await res.json()) as { sent: number; failed: number; codes: string[] };
-    if (result.sent > 0) return result.sent;
-    throw new DeliveryError(`Cloudflare refused: ${result.codes.join(", ")}`, result.codes.some((c) => RETRYABLE.test(c)));
+    if (!res.ok) {
+      throw new DeliveryError(`Cloudflare answered ${res.status} without a delivery receipt`,
+        res.status >= 500 || res.status === 429 || res.status === 408, false);
+    }
+    const result = await res.json().catch(() => null) as { sent?: number; failed?: number; codes?: unknown } | null;
+    const sent = result?.sent;
+    if (typeof sent === "number" && Number.isInteger(sent) && sent > 0 && sent <= envelope.to.length) return sent;
+
+    // A refusal is definitive only when the receipt accounts for every
+    // recipient: nothing sent, every recipient failed, one known code each.
+    // Anything less complete is ambiguous and must not be resent.
+    const codes = result?.codes;
+    const recipients = envelope.to.length;
+    if (sent === 0 && result?.failed === recipients && Array.isArray(codes) && codes.length === recipients &&
+        codes.every(isKnownWorkerRefusal)) {
+      throw new DeliveryError(`Cloudflare refused the send: ${codes.join(", ")}`, codes.some(code => retryableWorkerRefusals.has(code)));
+    }
+    throw new DeliveryError("Cloudflare returned an unrecognized delivery receipt", true, false);
   };
 }

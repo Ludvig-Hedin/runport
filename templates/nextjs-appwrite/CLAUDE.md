@@ -61,6 +61,13 @@ The app's private Git remote is on Runport Git or GitHub, as chosen at setup.
 - Tables have row security on. A row created with the session client belongs
   to that user only. For shared data, pass explicit `permissions` to `createRow`.
 - `app/items` is the example feature. Replace or rename it freely.
+- **App error alerts** are enabled by `deploy-app`. Keep both instrumentation
+  files, the grant in the root layout and the `/api/runport/error` route.
+  Uncaught server render, route and action errors are grouped by code
+  location. Admitted browser errors are counted in a daily summary.
+  Only fixed error labels and a fingerprint reach Runport. Error messages,
+  request URLs, headers, cookies and form data stay out of reports. Handled
+  failures you convert into a response are outside Next.js error instrumentation.
 
 ## Switches (env vars)
 
@@ -74,6 +81,7 @@ host's variables, then restart or redeploy.
 | `APP_URL` | `http://localhost:$PORT` | Public address for OAuth and reset links. Its host must be a platform in the Appwrite project. |
 | `SITE_PASSWORD` | unset | Locks every page behind /unlock. Changing it signs every visitor out of the lock. |
 | `ALLOW_INDEXING` | off | `1` lets search engines index the site, but only when `RAILWAY_ENVIRONMENT_NAME` is unset or `production` and the site is not locked. Public pages opt in with `pageMetadata()`. In preview or lock mode the sitemap is empty, robots.txt disallows crawling, and responses carry a noindex header. |
+| `RUNPORT_ERROR_URL`, `RUNPORT_ERROR_TOKEN` | unset | Server-only settings added by Runport on deployment. Leave them unset in local development. |
 | `ANALYTICS_URL`, `ANALYTICS_SITE_ID`, `ANALYTICS_INGEST_TOKEN` | unset | Runport sets these for hosted apps. All three enable visitor analytics on production builds, excluding Railway preview environments. Keep the per-site token on the server. |
 
 ## Public forms

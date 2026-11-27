@@ -100,6 +100,64 @@ PLATFORM_APPWRITE_ENDPOINT=https://admin.runport.app/v1
 bun mcp/src/deploy-app.ts <slug>`. Each app gets its own Railway project, so
 `apply.sh` never touches apps.
 
+## App alerts
+
+The router forwards authenticated registration and error reports to the
+existing mail gateway. The gateway keeps counts and pending alerts in a
+separate SQLite file beside its daily-cap database on `/data`. It sends plain
+Swedish alerts to the single owner account set by `ALERT_TO` in the gateway.
+Without a valid address, app alerts are disabled and ordinary mail keeps
+working. Alerts have daily limits of four per app and 30 across Runport,
+within the gateway's total cap. By default, ten percent of the total cap is
+reserved for Appwrite account mail. No extra service is needed.
+
+`deploy-app` registers the Railway web service using the local app registry.
+New apps inherit server and browser reporting from the starter. Existing
+apps need the reporting files copied into their source and a new deploy to
+report code errors. Redeploying also switches the app's Appwrite account
+mail to the separate login credential. Per app, the gateway allows 120
+reports per minute each for server and browser errors. It accepts up to five
+new server fingerprints per Stockholm day and counts repeats for 30 days.
+Browser reports require a signed page grant and are limited per visitor and
+app before forwarding. The gateway accepts up to 300 browser reports per
+minute across all apps and sends one digest for the previous Stockholm day.
+It retries explicit temporary refusals with backoff. Unrecognized replies
+and lost delivery acknowledgements stay charged and deduplicated.
+Permanent owner-address refusals are logged as failures and surfaced by
+the monitor. Queued alerts stay with their original Railway registration
+when a slug is reused.
+
+The five-minute job rotates through up to 20 apps per run. It checks Railway
+deployment and instance state and probes each running app's public URL.
+A confirmed sleeper stays asleep unless an open incident needs a verified
+recovery. The probe allows a second attempt after a cold start. Outages
+can send one notice and its recovery per one-hour incident window. Deleting
+an app from the registry or confirming the service is gone in Railway retires
+its alerts. Railway can return the same error for missing and inaccessible
+services, so the monitor confirms absence from the authorized environment's
+service listing. API errors preserve the last known state. A Railway rate
+limit pauses checks for the retry delay.
+
+The schema contract test takes Railway's published schema file.
+
+```sh
+(cd infra/railway/ops && bun install --frozen-lockfile)
+mkdir -p output/app-alerts-schema
+curl -fsSL https://raw.githubusercontent.com/railwayapp/cli/1e9b3663192e097a499471f932e0dcd29e8b2e07/src/gql/schema.json -o output/app-alerts-schema/railway-schema.json
+RAILWAY_CLI_SCHEMA="$PWD/output/app-alerts-schema/railway-schema.json" bun test infra/railway/ops/test/app-alert-schema.test.ts
+```
+
+The existing monitor runs app checks after its platform checks once both
+credentials are configured. For rollout, back up the gateway's SQLite
+database and compare cap counts after deployment. Deploy the updated
+gateway and router together before provisioning app reporting. Provision a
+dedicated token that can read the environments of deployed Runport apps, and
+save it as `app-alert-railway-token` in the `runport-prod` Keychain. Use
+`./apply.sh apply-app-alerts` to apply the pinned plan for the two monitor
+credentials and the gateway's owner address. The script derives the
+monitor key from the gateway master key. `./apply.sh deploy-monitor`
+publishes the monitor code.
+
 ## Runport Git
 
 Forgejo runs with SQLite on a 2 GB volume. Railway serves HTTPS at

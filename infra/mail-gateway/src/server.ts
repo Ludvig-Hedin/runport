@@ -2,7 +2,7 @@ import { SMTPServer, type SMTPServerSession } from "smtp-server";
 import { deliverWithinBudget, jsonLog, MailBudgetExceeded, type MailLog } from "./budgeted-delivery";
 import type { Config } from "./config";
 import { type Deliver, DeliveryError } from "./deliver";
-import { APP_ID, headerFrom, passwordMatches, senderProblem } from "./identity";
+import { APP_ID, SYSTEM_SENDER, headerFrom, passwordMatches, senderProblem } from "./identity";
 import type { Kind, Limits } from "./limits";
 
 export { jsonLog } from "./budgeted-delivery";
@@ -12,10 +12,12 @@ export { jsonLog } from "./budgeted-delivery";
 // username, so caps and logs are per app. Bulk sends log in as "<app>:news"
 // with the same password, so they are counted separately from login codes.
 
-const parseUser = (user: string): { app: string; kind: Kind } | null => {
+const parseUser = (user: string): { app: string; kind: Kind; login?: true } | null => {
   const [app, kind, extra] = user.toLowerCase().split(":");
   if (extra !== undefined || !APP_ID.test(app)) return null;
+  if (app === SYSTEM_SENDER) return kind === undefined ? { app, kind: "login" } : null;
   if (kind === undefined) return { app, kind: "mail" };
+  if (kind === "login") return { app, kind, login: true };
   return kind === "news" ? { app, kind: "news" } : null;
 };
 
@@ -34,7 +36,7 @@ export function createSmtpServer(config: Config, limits: Limits, deliver: Delive
 
     onAuth(auth, _session, callback) {
       const who = parseUser(auth.username ?? "");
-      if (!who || !passwordMatches(config.masterKey, who.app, auth.password ?? "")) {
+      if (!who || !passwordMatches(config.masterKey, who.app, auth.password ?? "", who.login)) {
         return callback(smtpError("Invalid login", 535));
       }
       callback(null, { user: `${who.app}:${who.kind}` });

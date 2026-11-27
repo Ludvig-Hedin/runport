@@ -18,6 +18,7 @@ export type AppRecord = {
   git: GitHost;
   setupPending?: true;
   createdAt: string;
+  alerts?: { origin: string; keychainService: string; environmentId: string; serviceId: string };
 };
 
 type Registry = { apps: AppRecord[] };

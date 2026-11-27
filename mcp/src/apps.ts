@@ -2,6 +2,7 @@ import { cp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { basename, join } from "node:path";
 import { AppwriteAdmin, AppwriteError } from "./appwrite-admin";
 import { config } from "./config";
+import { retireAppAlerts } from "./deploy-app-alerts";
 import { formMailSettings } from "./form-mail";
 import { readSecret } from "./keychain";
 import { run, succeeds } from "./exec";
@@ -78,10 +79,10 @@ async function ensurePlatform(projectId: string, hostname: string): Promise<void
   }
 }
 
-/** Same derivation as the gateway's identity.ts: one password per app from the master key. */
+/** Uses the gateway credential reserved for Appwrite account mail. */
 async function mailPassword(app: string): Promise<string> {
   const key = await readSecret("mail-gateway-master-key");
-  return new Bun.CryptoHasher("sha256", key).update(`mail-gateway:${app}`).digest("hex");
+  return new Bun.CryptoHasher("sha256", key).update(`mail-gateway-login:${app}`).digest("hex");
 }
 
 async function ensureMail(projectId: string, slug: string, name: string): Promise<void> {
@@ -90,7 +91,7 @@ async function ensureMail(projectId: string, slug: string, name: string): Promis
     senderEmail: `${slug}@${config.mailDomain}`,
     host: config.mailGateway.host,
     port: config.mailGateway.port,
-    username: slug,
+    username: `${slug}:login`,
     password: await mailPassword(slug),
   });
 }
@@ -138,6 +139,7 @@ async function provisionApp(input: CreateAppInput): Promise<CreateAppResult> {
     createdByPlatform: known?.createdByPlatform ?? !input.projectId,
     repoUrl: known?.repoUrl ?? null,
     createdAt: known?.createdAt ?? new Date().toISOString(),
+    ...(known?.alerts ? { alerts: known.alerts } : {}),
     ...(!known || known.setupPending ? { setupPending: true } : {}),
   };
   // Reserve the chosen host before Appwrite, template or package setup can fail.
@@ -252,6 +254,7 @@ export async function deleteApp(slug: string, confirm: string): Promise<DeleteRe
   }
   if (app.repoUrl) notes.push(`The ${app.git === "runport" ? "Runport" : "GitHub"} repo ${app.repoUrl} was kept.`);
 
+  if (app.alerts) await retireAppAlerts(slug, app.alerts);
   await removeApp(slug);
   return { slug, projectDeleted, folderDeleted, notes };
 }
