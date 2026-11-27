@@ -34,7 +34,7 @@ export function AuthCard({ appearance, title, subtitle, footer, children }: Card
 export function Message({ appearance, error, notice }: { appearance?: Appearance; error?: string; notice?: string }) {
   const { cls } = resolveAppearance(appearance);
   if (error) return <p role="alert" className={cls("alert")}>{error}</p>;
-  if (notice) return <p role="status" className={cls("notice")}>{notice}</p>;
+  if (notice) return <p role="status" tabIndex={-1} className={cls("notice")}>{notice}</p>;
   return null;
 }
 
