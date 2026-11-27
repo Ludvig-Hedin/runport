@@ -1,4 +1,5 @@
 import { S3Client } from "bun";
+import { requireConfirmedDelivery } from "./mail-delivery";
 
 // Shared by backup.ts and monitor.ts. Both run as Railway cron jobs.
 
@@ -38,6 +39,7 @@ export async function alertOwner(subject: string, text: string): Promise<void> {
   ].join("\r\n");
   const res = await fetch(required("CLOUDFLARE_MAIL_URL"), {
     method: "POST",
+    signal: AbortSignal.timeout(10_000),
     headers: {
       Authorization: `Bearer ${required("CLOUDFLARE_MAIL_TOKEN")}`,
       "X-Mail-From": from,
@@ -46,5 +48,5 @@ export async function alertOwner(subject: string, text: string): Promise<void> {
     },
     body: raw,
   });
-  if (!res.ok) throw new Error(`Alert mail failed: ${res.status} ${await res.text()}`);
+  await requireConfirmedDelivery(res);
 }

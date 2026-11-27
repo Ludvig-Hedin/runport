@@ -3,11 +3,12 @@
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 import { AppwriteException, ID } from "node-appwrite";
-import { createAdminClient, createSessionClient, sessionCookieName } from "./appwrite";
+import { createAdminClient, createAuthClient, createSessionClient, sessionCookieName } from "./appwrite";
 import { INVALID_EMAIL, TOO_MANY_ATTEMPTS, friendlyError, isEmail } from "./auth-errors";
 import { allowed } from "./rate-limit";
 import { appUrl, authMode } from "./config";
 import { setSessionCookie } from "./session";
+import { routes } from "@/runport.config";
 
 // Email + password sign-in, used when AUTH_MODE=password. Sign-out works in every mode.
 
@@ -16,7 +17,7 @@ export type FormState = { error?: string; notice?: string };
 const PASSWORD_OFF: FormState = { error: "Sign-in with a password is turned off." };
 
 async function startSession(email: string, password: string): Promise<void> {
-  const { account } = createAdminClient();
+  const { account } = await createAuthClient();
   await setSessionCookie(await account.createEmailPasswordSession({ email, password }));
 }
 
@@ -41,7 +42,7 @@ export async function signUp(_: FormState, form: FormData): Promise<FormState> {
   } catch (error) {
     return { error: friendlyError(error, "Could not create the account.") };
   }
-  redirect("/items");
+  redirect(routes.afterSignIn);
 }
 
 export async function signIn(_: FormState, form: FormData): Promise<FormState> {
@@ -54,7 +55,7 @@ export async function signIn(_: FormState, form: FormData): Promise<FormState> {
   } catch (error) {
     return { error: friendlyError(error, "Could not sign in.") };
   }
-  redirect("/items");
+  redirect(routes.afterSignIn);
 }
 
 /** Emails a reset link. Answers the same whether or not the account exists. */
@@ -101,5 +102,5 @@ export async function signOut(): Promise<void> {
     // Already signed out on the Appwrite side. Clearing the cookie is enough.
   }
   (await cookies()).delete(sessionCookieName());
-  redirect("/login");
+  redirect(routes.afterSignOut);
 }

@@ -55,7 +55,10 @@ for (const [name, check] of Object.entries(checks)) {
   const known = state[name];
   const analytics = analyticsChecks.has(name);
   const send = analytics ? analyticsOwnerAlert(process.env.ALERT_TO, alertOwner) : alertOwner;
-  await updateIncident(state, name, problem, now, analytics ? Infinity : ALERT_EVERY_MS, send);
+  await updateIncident(state, name, problem, now, analytics ? Infinity : ALERT_EVERY_MS, send, analytics)
+    .catch((error: Error) => {
+      console.error(JSON.stringify({ check: name, result: "alert failed", problem: error.message }));
+    });
   if (problem) console.log(JSON.stringify({ check: name, result: "failing", problem }));
   else if (analytics) console.log(JSON.stringify({ check: name, result: known ? "recovered" : "ok" }));
 }
