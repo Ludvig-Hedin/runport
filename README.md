@@ -31,6 +31,7 @@ Vercel, Clerk, Convex or Resend.
 | Mail delivery (Cloudflare) | Works online for login codes and other app mail |
 | Hosting online (Railway) | Appwrite, mail gateway and one app online, tested end to end |
 | Backups and outage alerts | Nightly database backup kept 14 days; email alerts every 5 minutes |
+| Error alerts per app | Next.js reports errors to Runport. Owner-only email and Railway outage checks need the [app alert rollout](infra/railway/README.md#app-alerts). |
 | Own addresses (`*.runport.app`) | Admin live at admin.runport.app; app addresses via custom-domain.ts |
 | Newsletters | Not yet: Cloudflare is for transactional mail |
 | Own admin panel | Not started; Appwrite's admin is used meanwhile |

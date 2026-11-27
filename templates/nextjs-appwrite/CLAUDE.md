@@ -55,6 +55,12 @@ bun run dev     # the port is in .env.local as PORT when the platform started it
 - Tables have row security on. A row created with the session client belongs
   to that user only. For shared data, pass explicit `permissions` to `createRow`.
 - `app/items` is the example feature. Replace or rename it freely.
+- **App error alerts** are enabled by `deploy-app`. Keep both instrumentation
+  files and the `/api/runport/error` route. Uncaught server render, route and
+  action errors and uncaught browser errors are grouped by code location.
+  Only fixed error labels and a fingerprint reach Runport. Error messages,
+  request URLs, headers, cookies and form data stay out of reports. Handled
+  failures you convert into a response are outside Next.js error instrumentation.
 
 ## Switches (env vars)
 
@@ -68,6 +74,7 @@ host's variables, then restart or redeploy.
 | `APP_URL` | `http://localhost:$PORT` | Public address for OAuth and reset links. Its host must be a platform in the Appwrite project. |
 | `SITE_PASSWORD` | unset | Locks every page behind /unlock. Changing it signs every visitor out of the lock. |
 | `ALLOW_INDEXING` | off | `1` lets search engines index the site, but only when `RAILWAY_ENVIRONMENT_NAME` is unset or `production` and the site is not locked. Otherwise robots.txt, the meta tag and an `X-Robots-Tag` header say noindex. |
+| `RUNPORT_ERROR_URL`, `RUNPORT_ERROR_TOKEN` | unset | Server-only settings added by Runport on deployment. Leave them unset in local development. |
 
 ## Appwrite MCP
 

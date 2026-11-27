@@ -37,3 +37,34 @@ Put an app online: `PLATFORM_KEYCHAIN_SERVICE=runport-prod
 PLATFORM_APPWRITE_ENDPOINT=https://admin.runport.app/v1
 bun mcp/src/deploy-app.ts <slug>`. Each app gets its own Railway project, so
 `apply.sh` never touches apps.
+
+## App alerts
+
+The router forwards authenticated registration and error reports to the
+existing mail gateway. The gateway keeps counts and pending alerts in a
+separate SQLite file beside its daily-cap database on `/data`. It sends plain
+Swedish alerts to the owner's fixed address through the same delivery and
+daily caps as app mail. No extra service is needed.
+
+`deploy-app` registers the Railway web service using the local app registry.
+New apps inherit server and browser reporting from the starter. Existing
+apps need the reporting files copied into their source and a new deploy to
+report code errors. Apps get separate budgets for server and browser errors,
+each with up to 120 reports per minute and five new fingerprints per
+Stockholm day. Repeated fingerprints increment the stored count. The
+browser sends up to five distinct fingerprints per page. Once the gateway
+attempts delivery, it avoids resending if the provider's reply is lost.
+
+The five-minute check uses Railway deployment status for apps with Serverless
+enabled, so the monitor never wakes them. It also checks the public service
+address of always-on apps. A Railway API error leaves the last known app state
+in place.
+
+**Rollout prerequisite.** Land the other shared Railway changes first.
+Wire `checkDeployedApps()` from `ops/app-alert-monitor.ts` into the existing
+monitor after its platform checks, with `RUNPORT_ALERT_MONITOR_KEY` derived
+by `monitorKey()` from the gateway master key and a dedicated Railway monitor
+token in `RAILWAY_MONITOR_TOKEN`. The module can also be run directly with
+`bun app-alert-monitor.ts` using those variables. Deploy the updated gateway
+and router before provisioning app reporting. Back up the gateway's existing
+SQLite data before rollout and compare the cap counts afterward.
