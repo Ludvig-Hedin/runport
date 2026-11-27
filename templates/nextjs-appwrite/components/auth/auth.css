@@ -407,5 +407,8 @@
 
 @layer components {
   .rp-status { outline: none; }
+  .rp-notice:focus { outline: none; }
+  /* Focused controls scroll clear of the open cookie panel. */
+  html { scroll-padding-bottom: var(--rp-consent-h, 0px); }
   .rp-status:empty { display: none; }
 }

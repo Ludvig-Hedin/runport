@@ -98,6 +98,8 @@ function PasswordForm({ appearance, email }: { appearance?: Appearance; email: s
       setCurrent("");
       setNext("");
       router.refresh(); // other devices were signed out: reload the device list
+      // Keep keyboard users where they were: on the confirmation.
+      requestAnimationFrame(() => form.current?.querySelector<HTMLElement>("[role=status]")?.focus());
     }
   }, [state, router]);
   return (
