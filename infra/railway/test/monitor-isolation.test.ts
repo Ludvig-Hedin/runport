@@ -10,7 +10,9 @@ test.each(["read", "write"] as const)("a platform state %s failure still runs ap
       const url = new URL(request.url);
       calls.push(`${request.method} ${url.pathname}`);
       if (url.pathname === "/internal/app-alerts") {
-        if (request.method === "GET") return Response.json({ apps: [] });
+        if (request.method !== "POST" || !(await request.json() as { processRailwayEvents?: boolean }).processRailwayEvents) {
+          return new Response(null, { status: 400 });
+        }
         return new Response(null, { status: 204 });
       }
       if (url.pathname.endsWith("/monitor/state.json")) {
@@ -36,7 +38,7 @@ test.each(["read", "write"] as const)("a platform state %s failure still runs ap
     env: {
       S3_ACCESS_KEY_ID: "fixture-key", S3_SECRET_ACCESS_KEY: "fixture-secret", S3_BUCKET: "fixture-bucket",
       S3_REGION: "us-east-1", S3_ENDPOINT: server.url.origin,
-      RUNPORT_ALERT_MONITOR_KEY: "fixture-monitor-key", RAILWAY_MONITOR_TOKEN: "fixture-railway-token",
+      RUNPORT_ALERT_MONITOR_KEY: "fixture-monitor-key",
       RUNPORT_ALERT_MONITOR_URL: new URL("/internal/app-alerts", server.url).href,
     },
     stdout: "pipe",

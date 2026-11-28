@@ -127,32 +127,43 @@ Permanent owner-address refusals are logged as failures and surfaced by
 the monitor. Queued alerts stay with their original Railway registration
 when a slug is reused.
 
-The five-minute job rotates through up to 20 apps per run. It checks Railway
-deployment and instance state and probes each running app's public URL.
-A confirmed sleeper stays asleep unless an open incident needs a verified
-recovery. The probe allows a second attempt after a cold start. Outages
-can send one notice and its recovery per one-hour incident window. Deleting
-an app from the registry or confirming the service is gone in Railway retires
-its alerts. Railway can return the same error for missing and inaccessible
-services, so the monitor confirms absence from the authorized environment's
-service listing. API errors preserve the last known state. A Railway rate
-limit pauses checks for the retry delay.
+`deploy-app` installs a project webhook with the local Railway CLI login.
+Railway authenticates deliveries with a write-only header derived for that
+app, project, environment, service and registration. Redeploys reuse an
+existing registration. Retiring an app and registering it again rotates
+the header and the webhook binding. The gateway stores only event state.
+Railway delivery is best effort and may be out of
+order. [Railway webhooks](https://docs.railway.com/observability/webhooks)
 
-The schema contract test takes Railway's published schema file.
+A crash, failed deployment or removal queues a public health check. The
+gateway confirms an unsuccessful probe after at least a minute before opening
+an incident. It ignores sleep events and removals
+of superseded deployments. A deployment or restart can close an incident
+after the app responds. The five-minute monitor processes pending checks and
+delivers queued owner mail independently of platform checks. Each outage
+window still allows one incident and one recovery. An app without a webhook
+has no outage monitoring. Removing an app from the registry disables its
+receiver. The Railway CLI login can create and list webhook rules. Editing or
+removing an existing Railway rule requires dashboard access.
+
+Back up the gateway data before applying the rollout. Use
+`./apply.sh apply-app-alerts` to enable the pinned gateway owner address and
+the internal monitor key. The command verifies the linked project and pins
+the plan and apply to Runport production. The script derives the key from the existing gateway
+master key. Run `./apply.sh deploy-gateway`, `./apply.sh deploy-router` and
+`./apply.sh deploy-monitor` from published main. Production needs no Railway
+credential for monitoring. Once these deployed paths are healthy, backfill
+the two existing apps from a checkout linked to the intended Railway projects:
 
 ```sh
-(cd infra/railway/ops && bun install --frozen-lockfile)
-mkdir -p output/app-alerts-schema
-curl -fsSL https://raw.githubusercontent.com/railwayapp/cli/1e9b3663192e097a499471f932e0dcd29e8b2e07/src/gql/schema.json -o output/app-alerts-schema/railway-schema.json
-RAILWAY_CLI_SCHEMA="$PWD/output/app-alerts-schema/railway-schema.json" bun test infra/railway/ops/test/app-alert-schema.test.ts
+PLATFORM_KEYCHAIN_SERVICE=runport-prod bun mcp/src/backfill-app-alerts.ts todo auth-preview
 ```
 
-The existing monitor runs app checks after its platform checks once both
-credentials are configured. Provision a dedicated token that can read the
-environments of deployed Runport apps and save it as `app-alert-railway-token`
-in the `runport-prod` Keychain. Use `./apply.sh apply-app-alerts` to apply the
-pinned plan for the two monitor credentials and the gateway's owner address.
-The script derives the monitor key from the gateway master key.
+The backfill verifies the linked project and its production Railway domain,
+backs up the local registry, and adds the project webhooks without rebuilding
+the apps. It preserves account maintenance enrolment. When rolling out both
+features, deploy the gateway that supports both app registrations before
+running the backfill or the combined monitor.
 
 ### Gateway storage cutover
 

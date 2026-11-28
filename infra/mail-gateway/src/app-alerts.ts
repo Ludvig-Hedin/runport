@@ -2,6 +2,7 @@ import { Database } from "bun:sqlite";
 import { createHmac, timingSafeEqual } from "node:crypto";
 import { DeliveryError, type Deliver } from "./deliver";
 import { stockholmDay, type Limits } from "./limits";
+import { probeRailwayApp, railwayWebhooks } from "./railway-webhook";
 
 const APP = /^[a-z][a-z0-9-]{1,35}$/;
 const UUID = /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/;
@@ -33,8 +34,10 @@ export const reportKey = (master: string, slug: string, serviceId: string, envir
 export const registrationKey = (master: string) => key(master, "register");
 export const monitorKey = (master: string) => key(master, "monitor");
 
-type Registration = { slug: string; projectId: string; environmentId: string; serviceId: string; domain: string };
-type Deployment = Registration & { registrationId: string; incident: number | null; lastIncident: number | null };
+type Registration = { slug: string; projectId: string; environmentId: string; serviceId: string; domain: string; accountMaintenance?: boolean };
+type Deployment = Omit<Registration, "accountMaintenance"> & {
+  registrationId: string; registeredAt: number; incident: number | null; lastIncident: number | null; accountMaintenance: number;
+};
 type Report = { source: string; kind: string; fingerprint: string };
 type Observation = { slug: string; registrationId: string; serviceId: string; environmentId: string; status: string; reason: string };
 type Alert = {
@@ -44,6 +47,7 @@ type Alert = {
 type Options = {
   path: string; master: string; owner?: string; limits: Limits; deliver: Deliver;
   log: (entry: Record<string, unknown>) => void; clock?: () => number;
+  probe?: (domain: string) => Promise<boolean>;
 };
 
 const status = (code: number) => new Response(null, { status: code });
@@ -55,7 +59,9 @@ function authenticated(request: Request, expected: string): boolean {
 
 async function boundedJson(request: Request, maxBytes: number): Promise<unknown> {
   const reader = request.body?.getReader();
-  if (!reader || request.headers.get("content-type") !== "application/json") throw new Error("JSON required");
+  if (!reader || request.headers.get("content-type")?.split(";", 1)[0].trim().toLowerCase() !== "application/json") {
+    throw new Error("JSON required");
+  }
   const bytes = new Uint8Array(maxBytes);
   let size = 0;
   while (true) {
@@ -76,12 +82,13 @@ const record = (value: unknown): value is Record<string, unknown> =>
 
 function registration(value: unknown, slug: string): Registration | undefined {
   if (!record(value) || value.slug !== slug) return;
-  const { projectId, environmentId, serviceId, domain } = value;
+  const { projectId, environmentId, serviceId, domain, accountMaintenance } = value;
   if (typeof projectId !== "string" || !UUID.test(projectId) ||
     typeof environmentId !== "string" || !UUID.test(environmentId) ||
     typeof serviceId !== "string" || !UUID.test(serviceId) ||
     typeof domain !== "string" || !/^[a-z0-9][a-z0-9-]{0,62}\.up\.railway\.app$/.test(domain)) return;
-  return { slug, projectId, environmentId, serviceId, domain };
+  if (accountMaintenance !== undefined && typeof accountMaintenance !== "boolean") return;
+  return { slug, projectId, environmentId, serviceId, domain, accountMaintenance };
 }
 
 function errorReport(value: unknown): Report | undefined {
@@ -103,7 +110,7 @@ function observation(value: unknown): value is Observation {
     typeof value.reason === "string" && (value.status !== "down" || Object.hasOwn(downReasons, value.reason));
 }
 
-export function createAppAlerts({ path, master, owner, limits, deliver, log, clock = Date.now }: Options) {
+export function createAppAlerts({ path, master, owner, limits, deliver, log, clock = Date.now, probe = probeRailwayApp }: Options) {
   if (!owner || !OWNER_ADDRESS.test(owner) || owner.length > 254) {
     log({ kind: "app-alert", result: "disabled", reason: "ALERT_TO must be one mailbox address" });
     return () => status(503);
@@ -114,7 +121,8 @@ export function createAppAlerts({ path, master, owner, limits, deliver, log, clo
   db.run(`
     CREATE TABLE IF NOT EXISTS apps (
       slug TEXT PRIMARY KEY, projectId TEXT NOT NULL, environmentId TEXT NOT NULL, serviceId TEXT NOT NULL,
-      domain TEXT NOT NULL, incident INTEGER, lastIncident INTEGER, registrationId TEXT NOT NULL
+      domain TEXT NOT NULL, incident INTEGER, lastIncident INTEGER, registrationId TEXT NOT NULL,
+      accountMaintenance INTEGER NOT NULL DEFAULT 0
     );
     CREATE TABLE IF NOT EXISTS alerts (
       id TEXT PRIMARY KEY, slug TEXT NOT NULL, category TEXT NOT NULL, detail TEXT NOT NULL,
@@ -138,7 +146,9 @@ export function createAppAlerts({ path, master, owner, limits, deliver, log, clo
       db.query<{ name: string }, []>(`PRAGMA table_info(${table})`).all().map((entry) => entry.name),
     );
     const appColumns = names("apps");
+    if (!appColumns.has("accountMaintenance")) db.run("ALTER TABLE apps ADD COLUMN accountMaintenance INTEGER NOT NULL DEFAULT 0");
     if (!appColumns.has("lastIncident")) db.run("ALTER TABLE apps ADD COLUMN lastIncident INTEGER");
+    if (!appColumns.has("registeredAt")) db.run("ALTER TABLE apps ADD COLUMN registeredAt INTEGER NOT NULL DEFAULT 0");
     if (!appColumns.has("registrationId")) {
       db.run("ALTER TABLE apps ADD COLUMN registrationId TEXT NOT NULL DEFAULT ''");
       for (const { slug } of db.query<{ slug: string }, []>("SELECT slug FROM apps").all()) {
@@ -165,6 +175,7 @@ export function createAppAlerts({ path, master, owner, limits, deliver, log, clo
     db.run("CREATE INDEX IF NOT EXISTS alerts_registration ON alerts(registrationId, channel, day)");
     db.run("CREATE INDEX IF NOT EXISTS alerts_due ON alerts(state, due)");
   })();
+  const webhooks = railwayWebhooks(db, probe, clock);
 
   const intake = db.query<{ count: number }, [string, string, number, number]>(`
     INSERT INTO traffic VALUES (?, ?, ?, 1)
@@ -348,14 +359,19 @@ export function createAppAlerts({ path, master, owner, limits, deliver, log, clo
       }
       if (request.method !== "POST") return status(405);
       const input = await boundedJson(request, 16_000).catch(() => undefined);
-      if (!record(input) || !Array.isArray(input.observations) || input.observations.length > 20
-        || !input.observations.every(observation)) return status(400);
-      const wait = input.retryAfterMs ?? 0;
-      if (typeof wait !== "number" || !Number.isSafeInteger(wait) || wait < 0 || wait > 30 * dayMs) return status(400);
-      observe.immediate(input.observations, now);
-      const last = input.observations.at(-1);
-      if (last) db.query("UPDATE monitor_cursor SET cursor = ? WHERE id = 1").run(last.slug);
-      if (wait) db.query("UPDATE monitor_cursor SET waitUntil = MAX(waitUntil, ?) WHERE id = 1").run(now + wait);
+      if (!record(input)) return status(400);
+      let processed = 0;
+      if (input.processRailwayEvents === true) {
+        processed = await webhooks.process(now, observe);
+      } else {
+        if (!Array.isArray(input.observations) || input.observations.length > 20 || !input.observations.every(observation)) return status(400);
+        const wait = input.retryAfterMs ?? 0;
+        if (typeof wait !== "number" || !Number.isSafeInteger(wait) || wait < 0 || wait > 30 * dayMs) return status(400);
+        observe.immediate(input.observations, now);
+        const last = input.observations.at(-1);
+        if (last) db.query("UPDATE monitor_cursor SET cursor = ? WHERE id = 1").run(last.slug);
+        if (wait) db.query("UPDATE monitor_cursor SET waitUntil = MAX(waitUntil, ?) WHERE id = 1").run(now + wait);
+      }
       db.query(`
         DELETE FROM alerts WHERE happened < ?
           OR (category != 'error' AND happened < ?)
@@ -368,14 +384,24 @@ export function createAppAlerts({ path, master, owner, limits, deliver, log, clo
         SELECT COUNT(*) AS count FROM alerts JOIN apps USING (registrationId)
         WHERE alerts.state IN ('failed', 'refused')
       `).get()!.count;
-      return new Response(null, { status: 204, headers: { "X-Runport-Alert-Delivery-Failures": String(failed) } });
+      return new Response(null, { status: 204, headers: {
+        "X-Runport-Alert-Delivery-Failures": String(failed), "X-Runport-Railway-Events-Processed": String(processed),
+      } });
     }
 
-    const match = path.match(/^\/_runport\/alerts\/(register|report)\/([a-z][a-z0-9-]{1,35})$/);
+    const match = path.match(/^\/_runport\/alerts\/(register|report|railway)\/([a-z][a-z0-9-]{1,35})$/);
     if (!match) return status(404);
     const [, action, slug] = match;
     const retiring = action === "register" && request.method === "DELETE";
     if (request.method !== "POST" && !retiring) return status(405);
+    if (action === "railway") {
+      const app = db.query<Deployment, [string]>("SELECT * FROM apps WHERE slug = ?").get(slug);
+      if (!app || !authenticated(request, key(master, `railway:${slug}:${app.projectId}:${app.environmentId}:${app.serviceId}:${app.registrationId}`))) return status(401);
+      const payload = await boundedJson(request, 24_000).catch(() => undefined);
+      if (!record(payload)) return status(400);
+      webhooks.receive(app, payload, clock());
+      return status(204);
+    }
     const reportingApp = action === "report" ? db.query<Deployment, [string]>("SELECT * FROM apps WHERE slug = ?").get(slug) : null;
     if (action === "report" && !reportingApp) return status(404);
     const expected = reportingApp ? reportKey(master, slug, reportingApp.serviceId, reportingApp.environmentId) : registrationKey(master);
@@ -383,24 +409,34 @@ export function createAppAlerts({ path, master, owner, limits, deliver, log, clo
     const input = await boundedJson(request, 512).catch(() => undefined);
     if (retiring) {
       if (!record(input) || typeof input.serviceId !== "string" || !UUID.test(input.serviceId) ||
-        typeof input.environmentId !== "string" || !UUID.test(input.environmentId)) return status(400);
+        typeof input.environmentId !== "string" || !UUID.test(input.environmentId) ||
+        (input.registrationId !== undefined && (typeof input.registrationId !== "string" || !UUID.test(input.registrationId)))) return status(400);
       const existing = db.query<Deployment, [string]>("SELECT * FROM apps WHERE slug = ?").get(slug);
-      if (existing && existing.serviceId === input.serviceId && existing.environmentId === input.environmentId) retire(existing);
+      if (existing && existing.serviceId === input.serviceId && existing.environmentId === input.environmentId &&
+          (input.registrationId === undefined || existing.registrationId === input.registrationId)) retire(existing);
       return status(204);
     }
     if (action === "register") {
       const app = registration(input, slug);
       if (!app) return status(400);
-      db.query(`
-        INSERT INTO apps (slug, projectId, environmentId, serviceId, domain, registrationId) VALUES (?, ?, ?, ?, ?, ?)
+      // NULL means the caller omitted maintenance enrolment. Existing
+      // registrations keep it, and new apps start unenrolled.
+      const stored = db.query<{ registrationId: string }, [string, string, string, string, string, string, number, number | null]>(`
+        INSERT INTO apps (slug, projectId, environmentId, serviceId, domain, registrationId, registeredAt, accountMaintenance)
+        VALUES (?, ?, ?, ?, ?, ?, ?, COALESCE(?8, 0))
         ON CONFLICT (slug) DO UPDATE SET projectId = excluded.projectId, environmentId = excluded.environmentId,
         serviceId = excluded.serviceId, domain = excluded.domain,
+        accountMaintenance = COALESCE(?8, apps.accountMaintenance),
         incident = CASE WHEN serviceId = excluded.serviceId AND environmentId = excluded.environmentId AND projectId = excluded.projectId THEN incident ELSE NULL END,
         lastIncident = CASE WHEN serviceId = excluded.serviceId AND environmentId = excluded.environmentId AND projectId = excluded.projectId THEN lastIncident ELSE NULL END,
+        registeredAt = CASE WHEN serviceId = excluded.serviceId AND environmentId = excluded.environmentId AND projectId = excluded.projectId
+          THEN registeredAt ELSE excluded.registeredAt END,
         registrationId = CASE WHEN serviceId = excluded.serviceId AND environmentId = excluded.environmentId AND projectId = excluded.projectId
           THEN registrationId ELSE excluded.registrationId END
-      `).run(slug, app.projectId, app.environmentId, app.serviceId, app.domain, crypto.randomUUID());
-      return status(204);
+        RETURNING registrationId
+      `).get(slug, app.projectId, app.environmentId, app.serviceId, app.domain, crypto.randomUUID(), clock(),
+        app.accountMaintenance === undefined ? null : Number(app.accountMaintenance))!;
+      return new Response(null, { status: 204, headers: { "X-Runport-Registration-Id": stored.registrationId } });
     }
     const event = errorReport(input);
     return status(event && reportingApp ? report.immediate(reportingApp, event, clock()) : 400);

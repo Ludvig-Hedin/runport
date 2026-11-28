@@ -20,6 +20,10 @@ require_published_main() {
   printf '%s\n' "$commit"
 }
 
+verify_app_alert_target() {
+  railway status --json | bun -e 'import { assertAppAlertsTarget } from "./check-git-plan.ts"; assertAppAlertsTarget(JSON.parse(await Bun.stdin.text()));'
+}
+
 deploy_main_source() (
   if { [ "$1" = "bootstrap-gateway-storage" ] && [ "$#" -ne 2 ]; } ||
       { [ "$1" != "bootstrap-gateway-storage" ] && [ "$#" -ne 1 ]; }; then
@@ -117,10 +121,7 @@ export SD_CF_MAIL_TOKEN=$(get cloudflare-mail-token)
 export SD_PUBLIC_DOMAIN=$(get public-domain || true)
 if [ -z "$SD_PUBLIC_DOMAIN" ]; then echo "Set the router domain first: security add-generic-password -s $SERVICE -a public-domain -w <domain>" >&2; exit 1; fi
 export SD_GIT_BACKUP_TOKEN=$(ensure git-backup-token)
-export SD_APP_ALERT_RAILWAY_TOKEN=$(get app-alert-railway-token || true)
-if [ -n "$SD_APP_ALERT_RAILWAY_TOKEN" ]; then
-  export SD_APP_ALERT_MONITOR_KEY=$(bun -e 'import { createHmac } from "node:crypto"; process.stdout.write(createHmac("sha256", process.env.SD_MAIL_MASTER_KEY).update("runport-app-alerts:monitor").digest("hex"));')
-fi
+export SD_APP_ALERT_MONITOR_KEY=$(bun -e 'import { createHmac } from "node:crypto"; process.stdout.write(createHmac("sha256", process.env.SD_MAIL_MASTER_KEY).update("runport-app-alerts:monitor").digest("hex"));')
 
 case "${1:-plan}" in
   plan) railway config plan "${@:2}" ;;
@@ -133,30 +134,35 @@ case "${1:-plan}" in
       echo "usage: $0 $1 [--no-op]" >&2; exit 64
     fi
     git diff --quiet HEAD -- .railway || { echo "Commit the Railway configuration before applying it." >&2; exit 1; }
+    target_args=()
+    if [ "$1" = "apply-app-alerts" ]; then
+      require_published_main apply.sh check-git-plan.ts >/dev/null
+      verify_app_alert_target
+      target_args=(--environment "$production_environment")
+    fi
     if [ "$1" = "apply-mail-storage" ]; then
       storage_commit=$(require_published_main apply.sh check-git-plan.ts check-mail-storage.ts mail-storage-state.graphql)
       check_mail_storage detached-bootstrapped "$2" "Runport bootstrap mail-gateway $storage_commit"
-    fi
-    if [ "$1" = "apply-app-alerts" ] && [ -z "$SD_APP_ALERT_RAILWAY_TOKEN" ]; then
-      echo "App alerts need the app-alert-railway-token in the runport-prod Keychain." >&2; exit 1
     fi
     umask 077
     plan_dir=$(mktemp -d)
     trap 'rm -f -- "$plan_dir/plan.json"; rmdir -- "$plan_dir"' EXIT
     # Let Railway use the same source hash here and at apply time. For this
     # nested configuration it hashes the directory instead of HEAD:.railway.
-    railway config plan --out "$plan_dir/plan.json"
+    # Bash 3 with nounset treats an empty array as unbound.
+    railway config plan ${target_args[@]+"${target_args[@]}"} --out "$plan_dir/plan.json"
     if [ "$1" = "apply-analytics" ]; then
       bun check-git-plan.ts "$plan_dir/plan.json" --analytics "${@:2}"
     elif [ "$1" = "apply-app-alerts" ]; then
       bun check-git-plan.ts "$plan_dir/plan.json" --app-alerts "${@:2}"
+      verify_app_alert_target
     elif [ "$1" = "apply-mail-storage" ]; then
       bun check-git-plan.ts "$plan_dir/plan.json" --mail-storage
       check_mail_storage detached-bootstrapped "$2" "Runport bootstrap mail-gateway $storage_commit"
     else
       bun check-git-plan.ts "$plan_dir/plan.json" "${@:2}"
     fi
-    railway config apply --yes --plan "$plan_dir/plan.json"
+    railway config apply ${target_args[@]+"${target_args[@]}"} --yes --plan "$plan_dir/plan.json"
     ;;
   *) echo "usage: $0 plan|apply|apply-analytics|apply-app-alerts|apply-mail-storage|bootstrap-gateway-storage|prepare-gateway-storage|merge-gateway-quota|deploy-git|deploy-analytics|deploy-gateway|deploy-router|deploy-backup|deploy-monitor" >&2; exit 64 ;;
 esac

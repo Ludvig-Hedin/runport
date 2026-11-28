@@ -2,13 +2,13 @@
 // online Runport, then a Railway project for the app itself.
 // Run: PLATFORM_KEYCHAIN_SERVICE=runport-prod PLATFORM_APPWRITE_ENDPOINT=https://<runport>/v1 bun src/deploy-app.ts <slug>
 // Safe to rerun: each step checks what exists first.
-import { homedir } from "node:os";
 import { join } from "node:path";
 import { AppwriteAdmin } from "./appwrite-admin";
 import { config } from "./config";
 import { registerAppAlerts, webService, type RailwayProject } from "./deploy-app-alerts";
 import { formMailSettings } from "./form-mail";
 import { readSecret } from "./keychain";
+import { railwayApi } from "./railway-api";
 import { loadRegistry, upsertApp } from "./registry";
 import { assertAppwriteId } from "./slug";
 import { provisionAppAnalytics } from "./analytics-integration";
@@ -34,22 +34,10 @@ async function railway(args: string[], input?: string, silentError = false): Pro
  */
 async function sleepWhenIdle(project: RailwayProject): Promise<void> {
   const { environmentId, serviceId } = webService(project);
-  let token = process.env.RAILWAY_API_TOKEN;
-  if (!token) {
-    const login = JSON.parse(await Bun.file(join(homedir(), ".railway", "config.json")).text()) as { user?: { accessToken?: string; token?: string } };
-    token = login.user?.accessToken ?? login.user?.token;
-  }
-  if (!token) throw new Error("Could not find the Railway login to turn on sleeping.");
-  const res = await fetch("https://backboard.railway.com/graphql/v2", {
-    method: "POST",
-    headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
-    body: JSON.stringify({
-      query: "mutation($s: String!, $e: String!) { serviceInstanceUpdate(serviceId: $s, environmentId: $e, input: { sleepApplication: true }) }",
-      variables: { s: serviceId, e: environmentId },
-    }),
-  });
-  const body = (await res.json()) as { errors?: { message: string }[] };
-  if (!res.ok || body.errors) throw new Error(`Railway refused to turn on sleeping: ${body.errors?.map((e) => e.message).join("; ") ?? res.status}`);
+  await railwayApi(
+    "mutation($s: String!, $e: String!) { serviceInstanceUpdate(serviceId: $s, environmentId: $e, input: { sleepApplication: true }) }",
+    { s: serviceId, e: environmentId },
+  );
 }
 
 // 1. Railway project and service with a public domain.

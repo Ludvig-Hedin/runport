@@ -1,10 +1,12 @@
 import { createHmac } from "node:crypto";
 import { config } from "./config";
 import { readSecret } from "./keychain";
+import { ensureRailwayWebhook } from "./railway-webhook";
 import type { AppRecord } from "./registry";
 
 export type RailwayProject = {
   id: string;
+  workspaceId: string;
   environments: { edges: { node: { id: string; name: string } }[] };
   services: { edges: { node: { id: string; name: string } }[] };
 };
@@ -31,6 +33,7 @@ async function setup(origin: string, keychainService: string) {
       body: JSON.stringify(data), redirect: "error", signal: AbortSignal.timeout(5000),
     });
     if (!response.ok) throw new Error(`App alert registry update failed (${response.status}).`);
+    return response;
   }
   return { target, key, update };
 }
@@ -39,16 +42,28 @@ export async function registerAppAlerts(slug: string, project: RailwayProject, d
   const keychainService = config.keychainService;
   const { target, key, update } = await setup(process.env.PLATFORM_ALERT_ORIGIN ?? "https://admin.runport.app", keychainService);
   const service = webService(project);
-  await update(slug, "POST", { slug, ...service, domain });
+  if (!project.workspaceId) throw new Error("Could not identify the Railway workspace for app alerts.");
+  const response = await update(slug, "POST", { slug, ...service, domain });
+  const registrationId = response.headers.get("X-Runport-Registration-Id");
+  if (!registrationId || !/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/.test(registrationId)) {
+    throw new Error("Runport gateway did not return a valid app registration ID.");
+  }
+  const scope = `${slug}:${service.projectId}:${service.environmentId}:${service.serviceId}:${registrationId}`;
+  const webhookUrl = new URL(`/_runport/alerts/railway/${slug}`, target);
+  webhookUrl.searchParams.set("binding", key(`railway-url:v1:${scope}`).slice(0, 24));
+  const webhook = await ensureRailwayWebhook(
+    { projectId: service.projectId, workspaceId: project.workspaceId },
+    webhookUrl.href, key(`railway:${scope}`),
+  );
   return {
-    registration: { origin: target.origin, keychainService, environmentId: service.environmentId, serviceId: service.serviceId },
+    registration: { origin: target.origin, keychainService, environmentId: service.environmentId, serviceId: service.serviceId, registrationId, webhook },
     RUNPORT_ERROR_URL: new URL(`/_runport/alerts/report/${slug}`, target).href,
     RUNPORT_ERROR_TOKEN: key(`report:${slug}:${service.serviceId}:${service.environmentId}`),
   };
 }
 
 export async function retireAppAlerts(slug: string, alerts: NonNullable<AppRecord["alerts"]>) {
-  const { origin, keychainService, environmentId, serviceId } = alerts;
+  const { origin, keychainService, environmentId, serviceId, registrationId } = alerts;
   const { update } = await setup(origin, keychainService);
-  await update(slug, "DELETE", { environmentId, serviceId });
+  await update(slug, "DELETE", { environmentId, serviceId, registrationId });
 }
