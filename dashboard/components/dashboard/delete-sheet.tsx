@@ -1,12 +1,13 @@
 "use client";
 
 import { useCallback, useEffect, useId, useState } from "react";
-import type { Inventory } from "@/lib/server/app-data";
+import type { Inventory } from "@/lib/server/app-ops";
 import type { AppRow } from "@/lib/server/overview";
 import { bytes, plural } from "./format";
 
-type Step = "backup" | "check" | "data" | "hosting" | "done";
+type Step = "stop" | "backup" | "check" | "data" | "hosting" | "done";
 const STEPS: { id: Exclude<Step, "done">; label: string }[] = [
+  { id: "stop", label: "Stop the app and pause all changes" },
   { id: "backup", label: "Back up users, data and files" },
   { id: "check", label: "Check the backup" },
   { id: "data", label: "Delete users, data and files" },
@@ -79,12 +80,12 @@ export function DeleteSheet({ row, visible, onRequestClose, onClosed, onDeleted 
   }, [close]);
 
   const matches = typed.trim().toLowerCase() === row.name.trim().toLowerCase();
-  const canDelete = matches && !!inventory && run.state !== "running" && run.state !== "done";
+  const canDelete = matches && !!inventory && !inventory.blocked && run.state !== "running" && run.state !== "done";
 
   async function start() {
     if (!canDelete) return;
-    setRun({ state: "running", step: "backup" });
-    let step: Step = "backup";
+    setRun({ state: "running", step: "stop" });
+    let step: Step = "stop";
     try {
       const res = await fetch(`/api/apps/${encodeURIComponent(row.slug)}/delete`, {
         method: "POST",
@@ -115,7 +116,7 @@ export function DeleteSheet({ row, visible, onRequestClose, onClosed, onDeleted 
           setRun({ state: "running", step });
         }
       }
-      throw Object.assign(new Error("The connection ended before the delete finished. Reload to see where it got to."), { deleted: step !== "backup" && step !== "check" });
+      throw Object.assign(new Error("The connection ended before the delete finished. Reload to see where it got to."), { deleted: step === "data" || step === "hosting" });
     } catch (error) {
       const e = error as Error & { deleted?: boolean };
       setRun({ state: "failed", step, error: e.message, deleted: !!e.deleted });
@@ -202,7 +203,11 @@ export function DeleteSheet({ row, visible, onRequestClose, onClosed, onDeleted 
             </ul>
           </section>
 
-          {run.state === "idle" ? (
+          {inventory?.blocked ? (
+            <p className="db-row-error" role="alert">
+              This app can’t be deleted here yet. {inventory.blocked} Nothing was changed.
+            </p>
+          ) : run.state === "idle" ? (
             <div className="db-field">
               <label htmlFor="confirm-name" className="db-label">
                 Type <strong>{row.name}</strong> to confirm

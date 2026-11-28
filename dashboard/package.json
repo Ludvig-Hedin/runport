@@ -8,7 +8,7 @@
     "start": "next start -p ${PORT:-3000}",
     "setup": "bun scripts/setup.ts",
     "typecheck": "tsc --noEmit",
-    "sync-apps": "bun scripts/sync-apps.ts"
+    "test": "bun test test"
   },
   "dependencies": {
     "next": "16.4.2",

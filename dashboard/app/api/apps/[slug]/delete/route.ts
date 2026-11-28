@@ -1,14 +1,10 @@
-import { ID } from "node-appwrite";
-import { createAdminClient } from "@/lib/appwrite";
-import { DATABASE_ID } from "@/lib/schema";
-import { backupApp } from "@/lib/server/app-data";
-import { deleteAppwriteProject, projectNames } from "@/lib/server/appwrite-console";
+import { deleteDeps } from "@/lib/server/app-ops";
 import { errorMessage, guardAction } from "@/lib/server/guard";
-import { deleteProject } from "@/lib/server/railway";
+import { runDelete } from "@/lib/ops/delete-flow";
 
-// Deletes an app in visible steps and streams each one as a JSON line:
-// backup → check → delete data → remove hosting → done. Nothing is deleted
-// unless the backup was read back and matched.
+// Deletes an app in visible steps, streamed as JSON lines. The flow and its
+// lock live in lib/ops/delete-flow.ts: nothing is deleted before a backup is
+// verified byte for byte and its id is saved.
 
 export const maxDuration = 300;
 
@@ -17,40 +13,29 @@ export async function POST(request: Request, { params }: { params: Promise<{ slu
   if ("response" in guard) return guard.response;
   const { app } = guard;
   const body = (await request.json().catch(() => ({}))) as { confirm?: string };
-  const names = await projectNames().catch(() => null);
-  if (!names) return Response.json({ error: "Couldn’t reach Appwrite. Nothing was deleted." }, { status: 502 });
-  const name = names.get(app.slug) ?? app.slug;
-  // A delete that stopped after the data step leaves only the hosting. Then
-  // there is nothing left to back up, and the retry finishes the job.
-  const dataGone = !names.has(app.slug);
-  if ((body.confirm ?? "").trim().toLowerCase() !== name.trim().toLowerCase()) {
-    return Response.json({ error: `Type ${name} to confirm.` }, { status: 400 });
+  if ((body.confirm ?? "").trim().toLowerCase() !== app.pins.name.trim().toLowerCase()) {
+    return Response.json({ error: `Type ${app.pins.name} to confirm.` }, { status: 400 });
+  }
+  let deps;
+  try {
+    deps = deleteDeps(app);
+  } catch (error) {
+    return Response.json({ error: errorMessage(error) }, { status: 409 });
   }
 
   const encoder = new TextEncoder();
   const stream = new ReadableStream({
     async start(controller) {
       const send = (event: Record<string, unknown>) => controller.enqueue(encoder.encode(`${JSON.stringify(event)}\n`));
-      let step = "backup";
+      let last = "stop";
       try {
-        let backup: { name: string; inventory: unknown } = { name: "made earlier", inventory: null };
-        if (!dataGone) {
-          send({ step: "backup" });
-          backup = await backupApp(app, (s) => send({ step: s === "check" ? "check" : "backup", detail: s }));
-          step = "data";
-          send({ step: "data" });
-          await deleteAppwriteProject(app.slug);
-        }
-        step = "hosting";
-        send({ step: "hosting" });
-        await deleteProject(app);
-        const { tables } = createAdminClient();
-        await tables
-          .createRow({ databaseId: DATABASE_ID, tableId: "deletions", rowId: ID.unique(), data: { slug: app.slug, name, backup: backup.name, counts: JSON.stringify(backup.inventory) } })
-          .catch(() => {});
-        send({ step: "done", backup: backup.name, inventory: backup.inventory });
+        const record = await runDelete(app.pins.railwayProjectId, app.pins.slug, deps, (step) => {
+          last = step;
+          if (step !== "done") send({ step });
+        });
+        send({ step: "done", backup: record.backupName ?? "", inventory: record.counts ?? null });
       } catch (error) {
-        send({ step: "error", failedAt: step, error: errorMessage(error), deleted: step !== "backup" });
+        send({ step: "error", failedAt: last, error: errorMessage(error), deleted: last === "data" || last === "hosting" });
       } finally {
         controller.close();
       }

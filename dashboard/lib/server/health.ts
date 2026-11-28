@@ -1,5 +1,5 @@
 import "server-only";
-import { platformService } from "./railway";
+import { platformServiceUp } from "./railway";
 
 // Platform health as the owner sees it. Public health URLs where they exist;
 // the mail gateway is private to Runport's network, so its Railway status is used.
@@ -21,12 +21,8 @@ export async function platformHealth(): Promise<Health[]> {
     probe(`${appwrite}/health/version`),
     probe("https://git.runport.app/api/healthz"),
     probe("https://analytics.runport.app/api/heartbeat"),
-    platformService("mail-gateway").then(
-      (s): Health["state"] => {
-        const d = s?.latestDeployment;
-        if (!d) return "unknown";
-        return d.status === "SUCCESS" && !d.deploymentStopped ? "ok" : "down";
-      },
+    platformServiceUp("mail-gateway").then(
+      (up): Health["state"] => (up === null ? "unknown" : up ? "ok" : "down"),
       (): Health["state"] => "unknown",
     ),
   ]);

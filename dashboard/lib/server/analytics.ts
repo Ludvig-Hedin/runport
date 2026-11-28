@@ -1,9 +1,9 @@
 import "server-only";
 import { createHash } from "node:crypto";
 
-// Visitors per app from Runport's Umami (analytics.runport.app). Umami has no
-// read-only key for sites owned by its admin, so the admin password lives in
-// ANALYTICS_ADMIN_PASSWORD on the server only.
+// Visitors per app from Runport's Umami (analytics.runport.app), read with a
+// view-only account (ANALYTICS_USERNAME / ANALYTICS_PASSWORD). It sees the
+// sites only through the "Runport sites" team and cannot change anything.
 
 let session: { token: string; until: number } | null = null;
 
@@ -15,12 +15,13 @@ function origin(): string | null {
 async function token(): Promise<string> {
   if (session && session.until > Date.now()) return session.token;
   const base = origin();
-  const password = process.env.ANALYTICS_ADMIN_PASSWORD;
-  if (!base || !password) throw new Error("Analytics is not configured.");
+  const username = process.env.ANALYTICS_USERNAME;
+  const password = process.env.ANALYTICS_PASSWORD;
+  if (!base || !username || !password) throw new Error("Analytics is not configured.");
   const res = await fetch(`${base}/api/auth/login`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ username: "admin", password }),
+    body: JSON.stringify({ username, password }),
     cache: "no-store",
     redirect: "error",
     signal: AbortSignal.timeout(8_000),

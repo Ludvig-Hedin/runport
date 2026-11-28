@@ -13,27 +13,50 @@ export type TableSpec = {
   columns: ColumnSpec[];
 };
 
+const text = (key: string, size = 255, required = false): ColumnSpec => ({ type: "varchar", key, size, required });
+
 export const TABLES: TableSpec[] = [
   {
-    // What only the Mac's app list knows: the repo. Filled by `bun run sync-apps`.
+    // The trusted app list, written only by the Mac's sync-dashboard tool.
+    // Row id = slug. Every id the dashboard may act on is pinned here.
     id: "apps",
     name: "Apps",
     columns: [
-      { type: "varchar", key: "slug", size: 64, required: true },
-      { type: "varchar", key: "name", size: 255, required: true },
-      { type: "varchar", key: "repoUrl", size: 512, required: false },
-      { type: "varchar", key: "git", size: 16, required: false },
+      text("slug", 64, true),
+      text("name", 255, true),
+      text("repoUrl", 512),
+      text("git", 16),
+      text("workspaceId", 64),
+      text("railwayProjectId", 64),
+      text("environmentId", 64),
+      text("serviceId", 64),
+      text("appwriteProjectId", 64),
+      text("analyticsSiteId", 64),
     ],
   },
   {
-    // One row per deleted app, with where its backup is.
+    // One row per app delete, row id = the app's Railway project id. It is
+    // the lock and the saved progress (lib/ops/delete-flow.ts).
     id: "deletions",
     name: "Deletions",
     columns: [
-      { type: "varchar", key: "slug", size: 64, required: true },
-      { type: "varchar", key: "name", size: 255, required: true },
-      { type: "varchar", key: "backup", size: 255, required: true },
-      { type: "varchar", key: "counts", size: 512, required: true },
+      text("slug", 64, true),
+      text("name", 255, true),
+      text("backup", 255, true),
+      text("counts", 512, true),
+      text("state", 16),
+      text("owner", 64),
+      text("prevStatus", 16),
+      text("manifestId", 64),
+      text("manifestSha", 64),
+      text("error", 512),
+      text("updatedAtMs", 16),
     ],
+  },
+  {
+    // The deployment a pause stopped, so resume starts exactly that one.
+    id: "app_state",
+    name: "App state",
+    columns: [text("slug", 64, true), text("pausedDeploymentId", 64), text("pausedAt", 32)],
   },
 ];

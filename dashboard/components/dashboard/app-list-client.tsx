@@ -15,6 +15,7 @@ const STATUS: Record<AppStatus, { label: string; tone: string; hint?: string }> 
   deploying: { label: "Deploying", tone: "maybe" },
   paused: { label: "Paused", tone: "idle", hint: "Visitors can’t reach it" },
   unknown: { label: "Unknown", tone: "idle" },
+  unverified: { label: "Needs a check", tone: "maybe" },
 };
 
 type Busy = { slug: string; action: "pause" | "resume" } | null;
@@ -128,7 +129,7 @@ export function AppListClient({ initialRows, now }: { initialRows: AppRow[]; now
                 </div>
                 <div className="db-app-status">
                   <span className={`db-pill db-pill-${status.tone}`}>{status.label}</span>
-                  {status.hint ? <span className="db-app-hint">{status.hint}</span> : null}
+                  {row.problem || status.hint ? <span className="db-app-hint">{row.problem ?? status.hint}</span> : null}
                 </div>
               </div>
 
@@ -184,7 +185,7 @@ export function AppListClient({ initialRows, now }: { initialRows: AppRow[]; now
                     </svg>
                   </a>
                 ) : null}
-                {row.status === "paused" ? (
+                {row.problem ? null : row.status === "paused" ? (
                   <button type="button" className="db-btn db-btn-sm db-btn-secondary" disabled={!!busy} aria-busy={mine || undefined} onClick={() => act(row, "resume")}>
                     {mine ? <span className="db-spinner" aria-hidden="true" /> : null}
                     {mine ? "Resuming…" : "Resume"}
@@ -201,9 +202,11 @@ export function AppListClient({ initialRows, now }: { initialRows: AppRow[]; now
                     {mine ? "Pausing…" : "Pause"}
                   </button>
                 )}
-                <button type="button" className="db-btn db-btn-sm db-btn-ghost-danger" disabled={!!busy} onClick={() => openDelete(row)}>
-                  Delete
-                </button>
+                {row.problem ? null : (
+                  <button type="button" className="db-btn db-btn-sm db-btn-ghost-danger" disabled={!!busy} onClick={() => openDelete(row)}>
+                    Delete
+                  </button>
+                )}
               </div>
             </li>
           );

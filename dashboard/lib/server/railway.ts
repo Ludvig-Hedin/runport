@@ -1,10 +1,13 @@
 import "server-only";
 import { cache } from "react";
+import { type Deployment, deployments, type HostingStatus, hostingStatus, type Pins } from "@/lib/ops/hosting";
+import { checkPins, duplicateSlugs, type PinProject } from "@/lib/ops/pins";
+import { loadPins, type AppPins } from "./registry";
 
-// Everything the dashboard knows about hosting comes from Railway's public
-// GraphQL API, with a workspace token in RAILWAY_API_TOKEN. Railway has no
-// narrower token that can read usage and pause or delete across projects, so
-// this file only ever acts on projects that pass isRunportApp().
+// Hosting facts from Railway's GraphQL API, with a workspace token in
+// RAILWAY_API_TOKEN. Railway has no narrower token that reads usage across
+// projects, so the dashboard only ever changes projects whose ids are pinned
+// in its app list (registry.ts) and match what Railway reports.
 
 const API = "https://backboard.railway.com/graphql/v2";
 
@@ -18,24 +21,29 @@ const PRICE = {
 
 export const PLAN_MINIMUM_USD = 20;
 
-/** Runport's own projects. They count towards cost but never get actions. */
+/** Runport's own projects: counted in the cost, never acted on. */
 const PLATFORM_PROJECTS = new Set(["runport", "runport-dashboard"]);
+export type { PinProject };
 
 export class RailwayError extends Error {}
 
-async function gql<T>(query: string, variables: Record<string, unknown> = {}): Promise<T> {
+/** Railway's error text can echo inputs, so only a short reason leaves this function. */
+export async function gql<T>(query: string, variables: Record<string, unknown> = {}): Promise<T> {
   const token = process.env.RAILWAY_API_TOKEN;
-  if (!token) throw new RailwayError("RAILWAY_API_TOKEN is not set.");
+  if (!token) throw new RailwayError("Railway is not connected yet.");
   const res = await fetch(API, {
     method: "POST",
     headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
     body: JSON.stringify({ query, variables }),
     cache: "no-store",
     signal: AbortSignal.timeout(15_000),
+  }).catch(() => {
+    throw new RailwayError("Railway did not answer.");
   });
   const body = (await res.json().catch(() => ({}))) as { data?: T; errors?: { message: string }[] };
   if (!res.ok || body.errors?.length || !body.data) {
-    throw new RailwayError(`Railway: ${body.errors?.map((e) => e.message).join("; ") ?? `HTTP ${res.status}`}`);
+    const denied = body.errors?.some((e) => /not authorized/i.test(e.message)) || res.status === 401 || res.status === 403;
+    throw new RailwayError(denied ? "Railway refused the dashboard's access." : `Railway answered with an error (${res.status}).`);
   }
   return body.data;
 }
@@ -46,24 +54,16 @@ function workspaceId(): string {
   return id;
 }
 
-export type DeploymentStatus =
-  | "BUILDING" | "CRASHED" | "DEPLOYING" | "FAILED" | "INITIALIZING" | "NEEDS_APPROVAL" | "QUEUED"
-  | "REMOVED" | "REMOVING" | "SKIPPED" | "SLEEPING" | "SUCCESS" | "WAITING";
-
-type Deployment = { id: string; status: DeploymentStatus; createdAt: string; deploymentStopped: boolean | null };
-
-export type RailwayService = {
+type ServiceInfo = { id: string; name: string; domains: string[] };
+export type RailwayProject = {
   id: string;
   name: string;
-  environmentId: string;
-  sleepApplication: boolean;
-  latestDeployment: Deployment | null;
-  /** When nothing is running (a paused app), its last deployment, used to resume. */
-  lastDeployment?: Deployment | null;
-  domains: string[];
+  environments: { id: string; name: string }[];
+  services: ServiceInfo[];
+  volumes: number;
+  /** Instances per environment, by service id, for the production check. */
+  instances: { serviceId: string; environmentId: string; domains: string[] }[];
 };
-
-export type RailwayProject = { id: string; name: string; createdAt: string; environmentId: string | null; services: RailwayService[] };
 
 type ProjectsQuery = {
   workspace: {
@@ -72,22 +72,15 @@ type ProjectsQuery = {
         node: {
           id: string;
           name: string;
-          createdAt: string;
           environments: { edges: { node: { id: string; name: string } }[] };
+          volumes: { edges: unknown[] };
           services: {
             edges: {
               node: {
                 id: string;
                 name: string;
                 serviceInstances: {
-                  edges: {
-                    node: {
-                      environmentId: string;
-                      sleepApplication: boolean | null;
-                      latestDeployment: Deployment | null;
-                      domains: { customDomains: { domain: string }[]; serviceDomains: { domain: string }[] };
-                    };
-                  }[];
+                  edges: { node: { environmentId: string; domains: { customDomains: { domain: string }[]; serviceDomains: { domain: string }[] } } }[];
                 };
               };
             }[];
@@ -98,137 +91,73 @@ type ProjectsQuery = {
   };
 };
 
-/** Every project in the workspace, once per request. */
+/** Every project in the workspace, once per request. Read only. */
 export const listProjects = cache(async (): Promise<RailwayProject[]> => {
   const data = await gql<ProjectsQuery>(
     `query($w: String!) { workspace(workspaceId: $w) { projects { edges { node {
-      id name createdAt
+      id name
       environments { edges { node { id name } } }
+      volumes { edges { node { id } } }
       services { edges { node { id name serviceInstances { edges { node {
-        environmentId sleepApplication
-        latestDeployment { id status createdAt deploymentStopped }
+        environmentId
         domains { customDomains { domain } serviceDomains { domain } }
       } } } } } }
     } } } } }`,
     { w: workspaceId() },
   );
   return data.workspace.projects.edges.map(({ node }) => {
-    const environmentId = node.environments.edges.find((e) => e.node.name === "production")?.node.id ?? null;
+    const instances = node.services.edges.flatMap(({ node: s }) =>
+      s.serviceInstances.edges.map(({ node: i }) => ({
+        serviceId: s.id,
+        environmentId: i.environmentId,
+        domains: [...i.domains.customDomains.map((d) => d.domain), ...i.domains.serviceDomains.map((d) => d.domain)],
+      })),
+    );
     return {
       id: node.id,
       name: node.name,
-      createdAt: node.createdAt,
-      environmentId,
-      services: node.services.edges.flatMap(({ node: s }) =>
-        s.serviceInstances.edges
-          .filter((i) => i.node.environmentId === environmentId)
-          .map(({ node: i }) => ({
-            id: s.id,
-            name: s.name,
-            environmentId: i.environmentId,
-            sleepApplication: !!i.sleepApplication,
-            latestDeployment: i.latestDeployment,
-            domains: [...i.domains.customDomains.map((d) => d.domain), ...i.domains.serviceDomains.map((d) => d.domain)],
-          })),
-      ),
+      environments: node.environments.edges.map((e) => e.node),
+      volumes: node.volumes.edges.length,
+      services: node.services.edges.map(({ node: s }) => ({ id: s.id, name: s.name, domains: instances.filter((i) => i.serviceId === s.id).flatMap((i) => i.domains) })),
+      instances,
     };
   });
 });
 
-export async function serviceVariables(projectId: string, environmentId: string, serviceId: string): Promise<Record<string, string>> {
-  const data = await gql<{ variables: Record<string, string> }>(
-    `query($p: String!, $e: String!, $s: String!) { variables(projectId: $p, environmentId: $e, serviceId: $s) }`,
-    { p: projectId, e: environmentId, s: serviceId },
-  );
-  return data.variables;
-}
+export type AppStatus = HostingStatus | "unverified";
 
 export type RunportApp = {
-  slug: string;
-  project: RailwayProject;
-  web: RailwayService;
-  /** The app's public address, custom domain first. */
+  pins: AppPins;
+  /** Set when the pinned ids do not match Railway. Such an app gets no actions. */
+  problem: string | null;
   url: string | null;
-  /** Server-only: the app's own Appwrite key, used for the backup before delete. */
-  appwriteKey: string;
-  analyticsSiteId: string | null;
+  status: AppStatus;
+  lastDeployAt: string | null;
+  /** Anything a delete would also destroy that the backup cannot bring back. */
+  extras: string[];
 };
 
-const runportEndpoint = () => (process.env.APPWRITE_ENDPOINT ?? "").replace(/\/+$/, "");
-
-/**
- * A Runport app is a project named "<slug>-app" with a "web" service whose
- * settings point at this Runport's Appwrite with project id <slug>. That is
- * exactly what mcp/src/deploy-app.ts creates. Anything else is left alone.
- */
-async function toRunportApp(project: RailwayProject): Promise<RunportApp | null> {
-  if (PLATFORM_PROJECTS.has(project.name) || !project.name.endsWith("-app") || !project.environmentId) return null;
-  const slug = project.name.slice(0, -"-app".length);
-  if (!/^[a-z0-9][a-z0-9-]{0,35}$/.test(slug)) return null;
-  const web = project.services.find((s) => s.name === "web");
-  if (!web) return null;
-  const vars = await serviceVariables(project.id, project.environmentId, web.id);
-  if (!web.latestDeployment) {
-    const last = await gql<{ deployments: { edges: { node: Deployment }[] } }>(
-      `query($p: String!, $e: String!, $s: String!) {
-        deployments(first: 1, input: { projectId: $p, environmentId: $e, serviceId: $s }) { edges { node { id status createdAt deploymentStopped } } }
-      }`,
-      { p: project.id, e: project.environmentId, s: web.id },
-    );
-    web.lastDeployment = last.deployments.edges[0]?.node ?? null;
-  }
-  if ((vars.APPWRITE_ENDPOINT ?? "").replace(/\/+$/, "") !== runportEndpoint() || vars.APPWRITE_PROJECT_ID !== slug || !vars.APPWRITE_API_KEY) {
-    return null;
-  }
-  const custom = web.domains.find((d) => !d.endsWith(".up.railway.app"));
-  const host = custom ?? web.domains[0];
-  return {
-    slug,
-    project,
-    web,
-    url: host ? `https://${host}` : (vars.APP_URL ?? null),
-    appwriteKey: vars.APPWRITE_API_KEY,
-    analyticsSiteId: vars.ANALYTICS_SITE_ID || null,
-  };
-}
+export const toPins = (a: AppPins): Pins => ({ projectId: a.railwayProjectId, environmentId: a.environmentId, serviceId: a.serviceId });
 
 export const listApps = cache(async (): Promise<RunportApp[]> => {
-  const projects = await listProjects();
-  const apps = await Promise.all(projects.map(toRunportApp));
-  return apps.filter((a): a is RunportApp => !!a).sort((a, b) => a.slug.localeCompare(b.slug));
+  const [pinned, projects] = await Promise.all([loadPins(), listProjects()]);
+  const duplicates = duplicateSlugs(pinned);
+  return Promise.all(
+    pinned.map(async (pins): Promise<RunportApp> => {
+      const { problem, project, extras } = checkPins(pins, projects, workspaceId(), duplicates);
+      if (problem || !project) return { pins, problem, url: null, status: "unverified", lastDeployAt: null, extras };
+      const domains = project.instances.find((i) => i.serviceId === pins.serviceId && i.environmentId === pins.environmentId)?.domains ?? [];
+      const host = domains.find((d) => !d.endsWith(".up.railway.app")) ?? domains[0];
+      const list: Deployment[] = await deployments(gql, toPins(pins));
+      return { pins, problem: null, url: host ? `https://${host}` : null, status: hostingStatus(list), lastDeployAt: list[0]?.createdAt ?? null, extras };
+    }),
+  );
 });
 
-/** The one app with this slug, or null. Actions always go through this check. */
+/** The verified app with this slug, or null. Every action goes through this. */
 export async function findApp(slug: string): Promise<RunportApp | null> {
-  return (await listApps()).find((a) => a.slug === slug) ?? null;
-}
-
-export type AppStatus = "live" | "sleeping" | "down" | "deploying" | "paused" | "unknown";
-
-export function appStatus(web: RailwayService): AppStatus {
-  const d = web.latestDeployment;
-  // Nothing running but an earlier deployment exists: paused by removal.
-  if (!d) return web.lastDeployment ? "paused" : "unknown";
-  switch (d.status) {
-    case "SLEEPING":
-      return "sleeping";
-    case "BUILDING":
-    case "DEPLOYING":
-    case "INITIALIZING":
-    case "QUEUED":
-    case "WAITING":
-      return "deploying";
-    case "CRASHED":
-    case "FAILED":
-      return "down";
-    case "REMOVED":
-    case "REMOVING":
-      return "paused";
-    case "SUCCESS":
-      return d.deploymentStopped ? "paused" : "live";
-    default:
-      return "unknown";
-  }
+  const app = (await listApps()).find((a) => a.pins.slug === slug);
+  return app && !app.problem ? app : null;
 }
 
 // --- Cost ---------------------------------------------------------------
@@ -269,10 +198,10 @@ export const costByProject = cache(async (): Promise<Map<string, number>> => {
   return cost;
 });
 
-/** Runport's share: the platform project, the dashboard and every app. */
+/** Runport's share: the platform project, the dashboard and every pinned app. */
 export async function runportCost(): Promise<{ total: number; period: BillingPeriod }> {
-  const [projects, apps, cost, period] = await Promise.all([listProjects(), listApps(), costByProject(), billingPeriod()]);
-  const ids = new Set([...projects.filter((p) => PLATFORM_PROJECTS.has(p.name)).map((p) => p.id), ...apps.map((a) => a.project.id)]);
+  const [projects, pinned, cost, period] = await Promise.all([listProjects(), loadPins(), costByProject(), billingPeriod()]);
+  const ids = new Set([...projects.filter((p) => PLATFORM_PROJECTS.has(p.name)).map((p) => p.id), ...pinned.map((a) => a.railwayProjectId)]);
   let total = 0;
   for (const id of ids) total += cost.get(id) ?? 0;
   return { total, period };
@@ -280,70 +209,65 @@ export async function runportCost(): Promise<{ total: number; period: BillingPer
 
 // --- Platform -------------------------------------------------------------
 
-export function platformService(name: string): Promise<RailwayService | null> {
-  return listProjects().then((projects) => projects.find((p) => p.name === "runport")?.services.find((s) => s.name === name) ?? null);
+async function runportService(name: string): Promise<{ project: RailwayProject; service: ServiceInfo; environmentId: string } | null> {
+  const project = (await listProjects()).find((p) => p.name === "runport");
+  const service = project?.services.find((s) => s.name === name);
+  const environmentId = project?.environments.find((e) => e.name === "production")?.id;
+  return project && service && environmentId ? { project, service, environmentId } : null;
 }
 
-export type BackupResult = { ok: boolean; at: string; detail: string | null };
+/** Whether a Runport platform service is running. */
+export async function platformServiceUp(name: string): Promise<boolean | null> {
+  const found = await runportService(name);
+  if (!found) return null;
+  const list = await deployments(gql, { projectId: found.project.id, environmentId: found.environmentId, serviceId: found.service.id });
+  return list.some((d) => d.status === "SUCCESS" && !d.deploymentStopped);
+}
+
+export type BackupStatus = { ok: boolean; at: string };
 
 type LogLine = { timestamp: string; attributes: { key: string; value: string }[] };
 
 /**
  * The newest result the nightly backup job logged ("backup ok" or "backup
- * failed"), read from the job's logs. Each night is a run of the current
- * deployment, so a redeploy does not count as a backup.
+ * failed"), read from the job's logs. A redeploy of the job is not a backup.
  */
-export async function lastBackup(): Promise<BackupResult | null> {
-  const projects = await listProjects();
-  const runport = projects.find((p) => p.name === "runport");
-  const backup = runport?.services.find((s) => s.name === "backup");
-  if (!runport || !backup) throw new RailwayError("The backup job was not found on Railway.");
-  const data = await gql<{ deployments: { edges: { node: { id: string } }[] } }>(
-    `query($p: String!, $e: String!, $s: String!) {
-      deployments(first: 4, input: { projectId: $p, environmentId: $e, serviceId: $s }) { edges { node { id } } }
-    }`,
-    { p: runport.id, e: backup.environmentId, s: backup.id },
-  );
-  for (const { node } of data.deployments.edges) {
+export async function lastBackup(): Promise<BackupStatus | null> {
+  const found = await runportService("backup");
+  if (!found) throw new RailwayError("The backup job was not found on Railway.");
+  const list = await deployments(gql, { projectId: found.project.id, environmentId: found.environmentId, serviceId: found.service.id });
+  for (const d of list.slice(0, 4)) {
     const logs = await gql<{ deploymentLogs: LogLine[] }>(
       `query($d: String!) { deploymentLogs(deploymentId: $d, limit: 500) { timestamp attributes { key value } } }`,
-      { d: node.id },
+      { d: d.id },
     );
     const results = logs.deploymentLogs
-      .map((line) => {
-        const attr = (k: string) => line.attributes.find((a) => a.key === k)?.value?.replace(/^"|"$/g, "") ?? null;
-        return { at: line.timestamp, result: attr("result"), reason: attr("reason") };
-      })
+      .map((line) => ({ at: line.timestamp, result: line.attributes.find((a) => a.key === "result")?.value?.replace(/^"|"$/g, "") }))
       .filter((l) => l.result === "backup ok" || l.result === "backup failed");
     const newest = results.at(-1);
-    if (newest) return { ok: newest.result === "backup ok", at: newest.at, detail: newest.reason };
+    if (newest) return { ok: newest.result === "backup ok", at: newest.at };
   }
   return null;
 }
 
-// --- Actions -------------------------------------------------------------
+// --- Delete --------------------------------------------------------------
 
-/**
- * Stops the app so visitors get Railway's "not found" until it is resumed. A
- * sleeping deployment cannot be stopped, so it is removed instead; both kinds
- * come back with resumeApp().
- */
-export async function pauseApp(app: RunportApp): Promise<void> {
-  const d = app.web.latestDeployment;
-  if (!d) throw new RailwayError("This app is already paused.");
-  if (d.status === "SLEEPING") await gql(`mutation($id: String!) { deploymentRemove(id: $id) }`, { id: d.id });
-  else await gql(`mutation($id: String!) { deploymentStop(id: $id) }`, { id: d.id });
-}
-
-/** Starts the last deployment again, from the image it already has. */
-export async function resumeApp(app: RunportApp): Promise<void> {
-  const d = app.web.latestDeployment ?? app.web.lastDeployment;
-  if (!d) throw new RailwayError("This app has no deployment to resume.");
-  await gql(`mutation($id: String!) { deploymentRedeploy(id: $id, usePreviousImageTag: true) { id } }`, { id: d.id });
-}
-
-/** Deletes the whole Railway project: the hosting and its addresses. */
-export async function deleteProject(app: RunportApp): Promise<void> {
-  if (PLATFORM_PROJECTS.has(app.project.name)) throw new RailwayError("Refusing to delete a Runport platform project.");
-  await gql(`mutation($id: String!) { projectDelete(id: $id) }`, { id: app.project.id });
+/** Deletes the pinned Railway project and confirms it is gone. */
+export async function deleteRailwayProject(app: RunportApp): Promise<void> {
+  if (app.problem) throw new RailwayError("Refusing to delete a project that does not match its pinned ids.");
+  const id = app.pins.railwayProjectId;
+  // Asks the workspace for its project list, fresh: an access error throws
+  // instead of looking like "already gone".
+  const exists = async () =>
+    gql<{ workspace: { projects: { edges: { node: { id: string } }[] } } }>(
+      `query($w: String!) { workspace(workspaceId: $w) { projects { edges { node { id } } } } }`,
+      { w: workspaceId() },
+    ).then((d) => d.workspace.projects.edges.some((e) => e.node.id === id));
+  if (!(await exists())) return;
+  await gql(`mutation($id: String!) { projectDelete(id: $id) }`, { id });
+  for (let i = 0; i < 10; i++) {
+    if (!(await exists())) return;
+    await new Promise((r) => setTimeout(r, 2000));
+  }
+  throw new RailwayError("Railway did not confirm the hosting was removed.");
 }

@@ -1,4 +1,4 @@
-import { inventory } from "@/lib/server/app-data";
+import { inventory } from "@/lib/server/app-ops";
 import { errorMessage, guardAction } from "@/lib/server/guard";
 
 export async function GET(request: Request, { params }: { params: Promise<{ slug: string }> }) {
