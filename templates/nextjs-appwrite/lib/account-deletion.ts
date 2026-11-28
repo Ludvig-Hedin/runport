@@ -430,6 +430,14 @@ export async function requestAccountDeletion(clients: DeletionClients, requester
   } catch (error) {
     if (conflict(error)) return { error: DELETION_IN_PROGRESS };
     logFailure("could not record intent", error);
+    try {
+      // Appwrite can commit the request before its reply is lost. A matching
+      // record is enough for the scheduled worker to finish the deletion.
+      if (await hasDeletionRecord(tables, requester)) return { notice: DELETION_PENDING };
+    } catch (lookupError) {
+      logFailure("could not verify saved intent", lookupError);
+      return { error: DELETION_UNCONFIRMED };
+    }
     return { error: DELETION_NOT_STARTED };
   }
 

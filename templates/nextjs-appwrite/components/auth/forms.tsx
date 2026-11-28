@@ -206,9 +206,7 @@ export function CodeSignInForm({ appearance, providers, initial, hasFlash }: Sha
     <AuthCard
       appearance={appearance}
       title="Check your email"
-      intro={<SignInIntro appearance={appearance} hasFlash={hasFlash}>
-        Enter the 6-digit code we sent to <strong>{state.email}</strong>.
-      </SignInIntro>}
+      subtitle={<>Enter the 6-digit code we sent to <strong>{state.email}</strong>.</>}
     >
       {/* The first submit button is the one Enter presses, so "Continue" comes first. */}
       <form key="code" ref={formRef} action={action} className={cls("form")}>

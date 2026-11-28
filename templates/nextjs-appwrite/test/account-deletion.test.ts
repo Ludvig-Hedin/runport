@@ -35,6 +35,7 @@ function fixture() {
   const stamp = () => new Date(now).toISOString();
   const flags = {
     failRecord: false, failBlock: false, loseBlockResponse: false, failPrefs: false, failUserRead: false,
+    loseRecordResponse: false,
     failDelete: "", shareAfterList: "", shareAfterRead: "", emailWrites: 0, emailConflicts: 0, failTarget: "",
     beforeBlock: undefined as (() => Promise<void>) | undefined,
   };
@@ -76,6 +77,7 @@ function fixture() {
       if (records.has(rowId)) throw failure(409, "row_already_exists");
       record(data.userId, data.userCreatedAt, stamp());
       Object.assign(records.get(rowId)!, data);
+      if (flags.loseRecordResponse) throw new Error("Lost receipt for saved deletion");
       return structuredClone(records.get(rowId)!);
     },
     async createTransaction() {
@@ -329,6 +331,23 @@ describe("account deletion", () => {
     expect(f.sessions.size).toBe(0);
     expect(f.person).toMatchObject({ email: deletedEmail, phone: "", name: "", prefs: { runportAccountDeleted: true }, labels: [] });
     expect(f.records.size).toBe(1);
+  });
+
+  test("a lost create response reports pending if the saved record matches the account", async () => {
+    const f = fixture();
+    f.flags.loseRecordResponse = true;
+    expect(await f.request()).toEqual({ notice: DELETION_PENDING });
+    expect(await f.deleting()).toBe(true);
+    await f.finish();
+    expect(f.person.status).toBe(false);
+  });
+
+  test("a failed create with a record for a previous account still reports nothing was deleted", async () => {
+    const f = fixture();
+    f.record(id, "2001-01-01");
+    f.flags.failRecord = true;
+    expect(await f.request()).toEqual({ error: DELETION_NOT_STARTED });
+    expect(f.person.status).toBe(true);
   });
 
   test("a queuing failure leaves the account intact and a block failure stays queued", async () => {
