@@ -1,29 +1,42 @@
-import type { BackupResult, Counts } from "./backup";
+import type { BackupResult, Counts, Source } from "./backup";
+import { SafeError } from "./errors";
 
-// The order of an app delete, with no I/O of its own so it can be tested with
-// fakes. One record per app, keyed by its Railway project id (which never
-// changes), is both the lock and the saved progress:
+// The order of an app delete, with no I/O of its own so it is tested with
+// fakes (test/delete-flow.test.ts).
 //
-//   started → frozen (hosting stopped, client writes off) → backed-up (backup
-//   checked byte for byte, its id saved) → data-deleted → done
+// One record per app, keyed by its Railway project id, holds a lease and the
+// saved progress. A run owns the record only while it holds the lease: a
+// generation number claimed atomically (store.claim) plus an expiry. Another
+// run may take over only after the lease has expired, and every step first
+// checks that the lease is still its own.
 //
-// Nothing is deleted before "backed-up" is saved. A failure before that
-// switches writes back on, restarts the app if it was running, and marks the
-// record "aborted". A failure after it leaves everything stopped, and a retry
-// continues from the saved step after checking the saved backup again.
+//   started → stopping (hosting stopped) → frozen (client services off, every
+//   other app key expired) → backed-up (backup checked byte for byte, its id
+//   saved) → data-deleted → done
+//
+// Each step's "before" state is saved before the step acts. Nothing is deleted
+// before "backed-up", and every later step checks the saved backup again,
+// including that it came from this very app. A failure before "backed-up"
+// rolls back: keys and services exactly as they were, then the app restarts
+// only if that worked. If rollback fails, the record is "stuck": the app stays
+// stopped and shows "needs a check".
 
-export type DeleteState = "started" | "frozen" | "backed-up" | "data-deleted" | "done" | "aborted";
+export type DeleteState = "started" | "stopping" | "frozen" | "backed-up" | "data-deleted" | "done" | "aborted" | "stuck";
+
+export type SavedKey = { id: string; name: string; scopes: string[]; expire: string | null };
 
 export type DeleteRecord = {
   key: string;
   slug: string;
   state: DeleteState;
-  /** Random id of the run that holds the lock. */
+  gen: number;
   owner: string;
-  /** What the hosting was doing before the delete stopped it. */
+  leaseUntil: number;
   prevStatus?: string;
-  /** Which client services were on before the freeze, saved before any is switched off. */
+  /** Client services that were on, saved before any is switched off. */
   frozenServices?: string;
+  /** The app's other keys and their expiry, saved before any is expired. */
+  savedKeys?: SavedKey[];
   manifestId?: string;
   manifestSha?: string;
   backupName?: string;
@@ -33,125 +46,182 @@ export type DeleteRecord = {
 };
 
 export type DeleteStore = {
-  /** Creates the record only if none exists. False when one does: that is the lock. */
+  /** Creates the record only if none exists. */
   create(record: DeleteRecord): Promise<boolean>;
   get(key: string): Promise<DeleteRecord | null>;
   update(key: string, patch: Partial<DeleteRecord>): Promise<void>;
+  /** Atomically claims lease generation `gen` for `key`; false if it was already claimed. */
+  claim(key: string, gen: number): Promise<boolean>;
 };
 
 export type DeleteDeps = {
   store: DeleteStore;
   now(): number;
   newOwner(): string;
+  /** The app's ids, which a saved backup must match. */
+  source: Source;
   /** Throws when the app has things the backup cannot restore. Changes nothing. */
   preflight(): Promise<void>;
-  /** Stops the hosting and returns what it was doing ("live", "sleeping", "paused", …). */
-  stopHosting(): Promise<string>;
-  restartHosting(prevStatus: string): Promise<void>;
-  /** Reads which client services are on now, as an opaque saved value. */
+  currentStatus(): Promise<string>;
+  /** Cancels builds, stops everything serving, waits for it and a drain period. */
+  stopHosting(): Promise<void>;
+  restartHosting(): Promise<void>;
   readServices(): Promise<string>;
-  freezeWrites(): Promise<void>;
-  /** Switches back on only the services that were on, per the saved value. */
+  freezeWrites(saved: string): Promise<void>;
   unfreezeWrites(saved: string): Promise<void>;
-  backup(): Promise<BackupResult>;
-  verify(manifestId: string, manifestSha: string, expected?: Counts): Promise<void>;
+  readKeys(): Promise<SavedKey[]>;
+  expireKeys(keys: SavedKey[]): Promise<void>;
+  restoreKeys(keys: SavedKey[]): Promise<void>;
+  backup(onProgress: () => Promise<void>): Promise<BackupResult>;
+  verify(manifestId: string, manifestSha: string, expected: Counts | undefined, onProgress: () => Promise<void>): Promise<void>;
   deleteData(): Promise<void>;
+  /** Re-lists the Railway project and throws if anything was added since the start. */
+  recheckHosting(): Promise<void>;
   deleteHosting(): Promise<void>;
 };
 
 export type DeleteStep = "stop" | "backup" | "check" | "data" | "hosting" | "done";
 
-/** A run that has not moved for this long is treated as crashed and may be taken over. */
-export const STALE_MS = 15 * 60 * 1000;
+export const LEASE_MS = 10 * 60 * 1000;
 
-export class DeleteBusy extends Error {
+export class DeleteBusy extends SafeError {
   constructor() {
-    super("A delete of this app is already running. Wait for it, or try again in 15 minutes if it stopped.");
+    super("A delete of this app is already running. Wait for it, or try again in 10 minutes if it stopped.");
   }
+}
+
+class LeaseLost extends SafeError {
+  constructor() {
+    super("Another run took over this delete. Nothing more was done here.");
+  }
+}
+
+const ACTIVE: DeleteState[] = ["started", "stopping", "frozen", "backed-up", "data-deleted", "stuck"];
+export const isActive = (state: DeleteState | undefined) => !!state && ACTIVE.includes(state);
+
+async function acquire(key: string, slug: string, deps: DeleteDeps): Promise<DeleteRecord | "done"> {
+  const { store } = deps;
+  const owner = deps.newOwner();
+  const fresh: DeleteRecord = { key, slug, state: "started", gen: 1, owner, leaseUntil: deps.now() + LEASE_MS, updatedAt: deps.now() };
+  if (await store.create(fresh)) {
+    if (!(await store.claim(key, 1))) throw new DeleteBusy();
+    return fresh;
+  }
+  const existing = await store.get(key);
+  if (!existing) throw new DeleteBusy();
+  if (existing.state === "done") return "done";
+  if (existing.leaseUntil > deps.now()) throw new DeleteBusy();
+  const gen = existing.gen + 1;
+  if (!(await store.claim(key, gen))) throw new DeleteBusy();
+  // An aborted run put everything back: start clean, with nothing saved from it.
+  const reset: Partial<DeleteRecord> =
+    existing.state === "aborted"
+      ? { state: "started", prevStatus: undefined, frozenServices: undefined, savedKeys: undefined, manifestId: undefined, manifestSha: undefined, backupName: undefined, counts: undefined }
+      : {};
+  await store.update(key, { ...reset, gen, owner, leaseUntil: deps.now() + LEASE_MS, error: undefined, updatedAt: deps.now() });
+  const mine = await store.get(key);
+  if (!mine || mine.gen !== gen || mine.owner !== owner) throw new DeleteBusy();
+  return mine;
 }
 
 export async function runDelete(key: string, slug: string, deps: DeleteDeps, emit: (step: DeleteStep) => void): Promise<DeleteRecord> {
   const { store } = deps;
-  const owner = deps.newOwner();
-  const fresh: DeleteRecord = { key, slug, state: "started", owner, updatedAt: deps.now() };
-
-  let record: DeleteRecord;
-  if (await store.create(fresh)) {
-    record = fresh;
-  } else {
-    const existing = await store.get(key);
-    if (!existing) throw new DeleteBusy();
-    if (existing.state === "done") {
-      emit("done");
-      return existing;
-    }
-    const moving = deps.now() - existing.updatedAt < STALE_MS;
-    const midway = existing.state === "started" || existing.state === "frozen";
-    if (midway && moving) throw new DeleteBusy();
-    // Take the lock over: an aborted run, a crashed run, or a saved step to continue.
-    await store.update(key, { owner, error: undefined, updatedAt: deps.now(), ...(existing.state === "aborted" ? { state: "started" as const, prevStatus: undefined } : {}) });
-    const mine = await store.get(key);
-    if (!mine || mine.owner !== owner) throw new DeleteBusy();
-    record = mine;
+  const got = await acquire(key, slug, deps);
+  if (got === "done") {
+    emit("done");
+    return (await store.get(key))!;
   }
+  let record = got;
 
+  /** Checks the lease is still ours and extends it. */
+  const hold = async () => {
+    const now = await store.get(key);
+    if (!now || now.gen !== record.gen || now.owner !== record.owner || now.leaseUntil <= deps.now()) throw new LeaseLost();
+    const leaseUntil = deps.now() + LEASE_MS;
+    await store.update(key, { leaseUntil, updatedAt: deps.now() });
+    record = { ...record, leaseUntil };
+  };
   const save = async (patch: Partial<DeleteRecord>) => {
+    await hold();
     record = { ...record, ...patch, updatedAt: deps.now() };
     await store.update(key, { ...patch, updatedAt: record.updatedAt });
   };
+  const verifySaved = async () => {
+    if (!record.manifestId || !record.manifestSha) throw new SafeError("The saved backup record is incomplete. Nothing more was deleted.");
+    await deps.verify(record.manifestId, record.manifestSha, record.counts, hold);
+  };
 
-  // Before anything is deleted: stop, freeze, back up, check, save.
-  if (record.state === "started" || record.state === "frozen") {
-    let froze = record.state === "frozen";
+  if (record.state === "started" || record.state === "stopping" || record.state === "frozen" || record.state === "stuck") {
+    let stopped = record.state !== "started";
     try {
-      if (record.state === "started") await deps.preflight();
+      if (record.state === "started") {
+        await deps.preflight();
+        await save({ prevStatus: await deps.currentStatus(), state: "stopping" });
+      }
       emit("stop");
-      const prevStatus = record.prevStatus ?? (await deps.stopHosting());
-      if (!record.prevStatus) await save({ prevStatus });
+      stopped = true;
+      await hold();
+      await deps.stopHosting();
       if (!record.frozenServices) await save({ frozenServices: await deps.readServices() });
-      froze = true;
-      await deps.freezeWrites();
+      await hold();
+      await deps.freezeWrites(record.frozenServices!);
+      if (!record.savedKeys) await save({ savedKeys: await deps.readKeys() });
+      await hold();
+      await deps.expireKeys(record.savedKeys!);
       await save({ state: "frozen" });
       emit("backup");
-      const backup = await deps.backup();
+      await hold();
+      const backup = await deps.backup(hold);
       emit("check");
-      await deps.verify(backup.manifestId, backup.manifestSha, backup.counts);
+      await deps.verify(backup.manifestId, backup.manifestSha, backup.counts, hold);
       await save({ state: "backed-up", manifestId: backup.manifestId, manifestSha: backup.manifestSha, backupName: backup.name, counts: backup.counts });
     } catch (error) {
-      const message = error instanceof Error ? error.message : "Something went wrong.";
-      // Put the app back the way it was. If that fails too, say so.
-      const undo: string[] = [];
-      if (froze) {
-        // Unknown earlier state: leave the services off rather than guess.
-        if (!record.frozenServices) undo.push("switch changes back on (the earlier settings were not saved)");
-        else await deps.unfreezeWrites(record.frozenServices).catch(() => undo.push("switch changes back on"));
+      if (error instanceof LeaseLost) throw error;
+      const message = error instanceof SafeError ? error.message : "The delete stopped before anything was deleted.";
+      if (!stopped) {
+        // Refused before anything changed.
+        await save({ state: "aborted", error: message });
+        throw new SafeError(message);
       }
-      if (record.prevStatus) await deps.restartHosting(record.prevStatus).catch(() => undo.push("restart the app"));
-      await save({ state: "aborted", error: undo.length ? `${message} Could not ${undo.join(" or ")}.` : message });
-      throw new Error(undo.length ? `${message} Could not ${undo.join(" or ")}; check the app.` : message);
+      const problems: string[] = [];
+      if (record.savedKeys) await deps.restoreKeys(record.savedKeys).catch(() => problems.push("switch the app's keys back on"));
+      if (record.frozenServices) await deps.unfreezeWrites(record.frozenServices).catch(() => problems.push("switch changes back on"));
+      // Restart only when writes are back exactly as they were.
+      if (!problems.length && (record.prevStatus === "live" || record.prevStatus === "sleeping")) {
+        await deps.restartHosting().catch(() => problems.push("restart the app"));
+      }
+      if (problems.length) {
+        await save({ state: "stuck", error: `${message} Could not ${problems.join(" or ")}.` }).catch(() => {});
+        throw new SafeError(`${message} The app is stopped and needs a check: could not ${problems.join(" or ")}. Nothing was deleted.`);
+      }
+      await save({ state: "aborted", error: message }).catch(() => {});
+      throw new SafeError(`${message} Nothing was deleted, and the app is back as it was.`);
     }
-  } else if (record.state === "backed-up") {
-    // A retry: the saved backup must still be there and whole.
-    emit("check");
-    if (!record.manifestId || !record.manifestSha) throw new Error("The saved backup record is incomplete. Nothing more was deleted.");
-    await deps.verify(record.manifestId, record.manifestSha, record.counts);
   }
 
   try {
     if (record.state === "backed-up") {
+      emit("check");
+      await verifySaved();
       emit("data");
+      await hold();
       await deps.deleteData();
       await save({ state: "data-deleted" });
     }
     if (record.state === "data-deleted") {
+      emit("check");
+      await verifySaved();
       emit("hosting");
+      await hold();
+      await deps.recheckHosting();
       await deps.deleteHosting();
       await save({ state: "done" });
     }
   } catch (error) {
-    const message = error instanceof Error ? error.message : "Something went wrong.";
+    if (error instanceof LeaseLost) throw error;
+    const message = error instanceof SafeError ? error.message : "The delete stopped partway.";
     await save({ error: message }).catch(() => {});
-    throw new Error(`${message} The backup is saved; try again to finish.`);
+    throw new SafeError(`${message} The backup is saved; try again to finish.`);
   }
   emit("done");
   return record;

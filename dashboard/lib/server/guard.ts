@@ -1,4 +1,5 @@
 import "server-only";
+import { SafeError, safeMessage } from "@/lib/ops/errors";
 import { ownerOrResponse } from "@/lib/owner";
 import { findApp, type RunportApp } from "./railway";
 
@@ -25,8 +26,8 @@ export async function guardAction(request: Request, slug: string): Promise<{ app
   return { app };
 }
 
-/** A short, safe reason for the browser. Our own errors are written to be shown. */
+/** Only messages we wrote ourselves (SafeError) reach the browser; anything else gets a fixed one. */
 export function errorMessage(error: unknown): string {
-  const text = error instanceof Error ? error.message : "";
-  return text && text.length < 300 ? text : "Something went wrong.";
+  if (!(error instanceof SafeError)) console.error("[dashboard] action failed:", error instanceof Error ? error.name : typeof error);
+  return safeMessage(error);
 }

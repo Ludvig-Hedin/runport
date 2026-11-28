@@ -202,9 +202,9 @@ export function AppListClient({ initialRows, now }: { initialRows: AppRow[]; now
                     {mine ? "Pausing…" : "Pause"}
                   </button>
                 )}
-                {row.problem ? null : (
+                {row.problem && !row.deleting ? null : (
                   <button type="button" className="db-btn db-btn-sm db-btn-ghost-danger" disabled={!!busy} onClick={() => openDelete(row)}>
-                    Delete
+                    {row.deleting ? "Finish delete" : "Delete"}
                   </button>
                 )}
               </div>

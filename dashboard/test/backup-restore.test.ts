@@ -108,20 +108,21 @@ function seeded(): Project {
   };
 }
 
+const SRC = { appwriteProjectId: "fixture", railwayProjectId: "rail-1" };
 let ids = 0;
 const newId = () => `copy-${++ids}`;
 
 test("backup copies everything with checksums and verifies byte for byte", async () => {
   const store = memoryStore();
-  const result = await runBackup(fakeProject("fixture", seeded()), store, newId);
+  const result = await runBackup(fakeProject("fixture", seeded()), store, newId, SRC);
   expect(result.counts).toEqual({ users: 2, tables: 1, rows: 2, files: 2, bytes: jsonBytes.length + binBytes.length });
-  const manifest = await verifyBackup(store, result.manifestId, result.manifestSha, result.counts);
+  const manifest = await verifyBackup(store, result.manifestId, result.manifestSha, { expected: result.counts, source: SRC });
   expect(manifest.buckets[0]!.files.map((f) => f.sha256)).toEqual([sha256(jsonBytes), sha256(binBytes)]);
 });
 
 test("a changed file copy fails the check", async () => {
   const store = memoryStore();
-  const result = await runBackup(fakeProject("fixture", seeded()), store, newId);
+  const result = await runBackup(fakeProject("fixture", seeded()), store, newId, SRC);
   const manifest = JSON.parse(new TextDecoder().decode(store.files.get(result.manifestId)!));
   store.files.set(manifest.buckets[0].files[0].copyId, enc('{"note":"tampered"}'));
   await expect(verifyBackup(store, result.manifestId, result.manifestSha)).rejects.toThrow("does not match");
@@ -129,29 +130,29 @@ test("a changed file copy fails the check", async () => {
 
 test("a changed manifest fails the check", async () => {
   const store = memoryStore();
-  const result = await runBackup(fakeProject("fixture", seeded()), store, newId);
+  const result = await runBackup(fakeProject("fixture", seeded()), store, newId, SRC);
   await expect(verifyBackup(store, result.manifestId, sha256("something else"))).rejects.toThrow("does not match");
 });
 
 test("apps with teams are refused, since memberships cannot be restored yet", async () => {
   const p = seeded();
   p.teams = 1;
-  await expect(runBackup(fakeProject("fixture", p), memoryStore(), newId)).rejects.toBeInstanceOf(Unsupported);
+  await expect(runBackup(fakeProject("fixture", p), memoryStore(), newId, SRC)).rejects.toBeInstanceOf(Unsupported);
 });
 
 test("an unknown password hash or column type is refused", async () => {
   const a = seeded();
   (a.users[0] as { hash: string }).hash = "scrypt";
-  await expect(runBackup(fakeProject("fixture", a), memoryStore(), newId)).rejects.toBeInstanceOf(Unsupported);
+  await expect(runBackup(fakeProject("fixture", a), memoryStore(), newId, SRC)).rejects.toBeInstanceOf(Unsupported);
   const b = seeded();
   b.dbs[0]!.tables[0]!.columns.push({ key: "parent", type: "relationship", required: false });
-  await expect(runBackup(fakeProject("fixture", b), memoryStore(), newId)).rejects.toBeInstanceOf(Unsupported);
+  await expect(runBackup(fakeProject("fixture", b), memoryStore(), newId, SRC)).rejects.toBeInstanceOf(Unsupported);
 });
 
 test("restore into an empty isolated project gives back the same users, rows and file bytes", async () => {
   const store = memoryStore();
   const source = seeded();
-  const result = await runBackup(fakeProject("fixture", source), store, newId);
+  const result = await runBackup(fakeProject("fixture", source), store, newId, SRC);
   const target = empty();
   const counts = await restoreBackup(store, result.manifestId, result.manifestSha, fakeProject("restore-target", target));
   expect(counts).toEqual(result.counts);
@@ -162,6 +163,18 @@ test("restore into an empty isolated project gives back the same users, rows and
 
 test("restore refuses a project that is not empty", async () => {
   const store = memoryStore();
-  const result = await runBackup(fakeProject("fixture", seeded()), store, newId);
+  const result = await runBackup(fakeProject("fixture", seeded()), store, newId, SRC);
   await expect(restoreBackup(store, result.manifestId, result.manifestSha, fakeProject("busy", seeded()))).rejects.toThrow("empty project");
+});
+
+test("a backup from another app fails the check", async () => {
+  const store = memoryStore();
+  const result = await runBackup(fakeProject("fixture", seeded()), store, newId, SRC);
+  await expect(verifyBackup(store, result.manifestId, result.manifestSha, { source: { appwriteProjectId: "other", railwayProjectId: "rail-1" } })).rejects.toThrow("another app");
+});
+
+test("users with two-step sign-in are refused", async () => {
+  const p = seeded();
+  (p.users[0] as { mfa?: boolean }).mfa = true;
+  await expect(runBackup(fakeProject("fixture", p), memoryStore(), newId, SRC)).rejects.toThrow("two-step");
 });

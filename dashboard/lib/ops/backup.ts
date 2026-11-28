@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { type AppwriteApi, listAll } from "./appwrite-rest";
+import { SafeError } from "./errors";
 
 // The backup taken right before an app is deleted. It covers everything the
 // delete removes from Appwrite: users (with password hashes), tables with
@@ -15,15 +16,19 @@ type Doc = { $id: string; [key: string]: unknown };
 export type Column = { key: string; type: string; required: boolean; array?: boolean; size?: number; min?: number; max?: number; default?: unknown; elements?: string[]; format?: string; encrypt?: boolean };
 export type Index = { key: string; type: string; columns: string[]; orders?: string[]; lengths?: number[] };
 export type TableDoc = Doc & { name: string; $permissions: string[]; rowSecurity: boolean; enabled: boolean; columns: Column[]; indexes: Index[] };
-export type UserDoc = Doc & { email: string; name: string; phone: string; password?: string; hash?: string; hashOptions?: Record<string, unknown>; emailVerification: boolean; phoneVerification: boolean; status: boolean; labels: string[]; prefs: Record<string, unknown> };
+export type UserDoc = Doc & { email: string; name: string; phone: string; password?: string; hash?: string; hashOptions?: Record<string, unknown>; emailVerification: boolean; phoneVerification: boolean; status: boolean; labels: string[]; prefs: Record<string, unknown>; mfa?: boolean };
 export type BucketDoc = Doc & { name: string; $permissions: string[]; fileSecurity: boolean; enabled: boolean; maximumFileSize: number; allowedFileExtensions: string[]; compression: string; encryption: boolean; antivirus: boolean };
 export type FileDoc = Doc & { name: string; $permissions: string[]; sizeOriginal: number; mimeType: string };
 
 export type Counts = { users: number; tables: number; rows: number; files: number; bytes: number };
 
+/** Where a backup came from. A delete only continues on the same app. */
+export type Source = { appwriteProjectId: string; railwayProjectId: string };
+
 export type Manifest = {
   version: number;
   app: string;
+  source: Source;
   takenAt: string;
   counts: Counts;
   users: UserDoc[];
@@ -37,7 +42,7 @@ export type BackupStore = {
   get(fileId: string): Promise<Uint8Array>;
 };
 
-export class Unsupported extends Error {}
+export class Unsupported extends SafeError {}
 
 export const sha256 = (bytes: Uint8Array | string) => createHash("sha256").update(bytes).digest("hex");
 
@@ -45,7 +50,7 @@ const RESTORABLE_COLUMNS = new Set(["varchar", "text", "mediumtext", "longtext",
 const RESTORABLE_HASHES = new Set(["argon2", "bcrypt"]);
 
 /** Everything in the project the delete would remove, read with a read-only key. */
-export async function snapshot(api: AppwriteApi): Promise<Omit<Manifest, "buckets" | "counts" | "takenAt" | "version"> & { buckets: { bucket: BucketDoc; files: FileDoc[] }[] }> {
+export async function snapshot(api: AppwriteApi): Promise<Omit<Manifest, "buckets" | "counts" | "takenAt" | "version" | "source"> & { buckets: { bucket: BucketDoc; files: FileDoc[] }[] }> {
   // Things the backup cannot restore. Refuse instead of losing them.
   const teams = await api.get<{ total: number }>("/teams");
   if (teams.total > 0) throw new Unsupported(`It uses ${teams.total} team(s), and team memberships cannot be backed up yet.`);
@@ -55,6 +60,8 @@ export async function snapshot(api: AppwriteApi): Promise<Omit<Manifest, "bucket
   const users = await listAll<UserDoc>(api, "/users", "users");
   for (const u of users) {
     if (u.password && !RESTORABLE_HASHES.has(String(u.hash))) throw new Unsupported(`A user has a ${u.hash} password, which cannot be restored yet.`);
+    // Two-step sign-in factors cannot be read or restored.
+    if (u.mfa) throw new Unsupported("A user has two-step sign-in turned on, which cannot be backed up yet.");
   }
 
   const databases = await Promise.all(
@@ -104,24 +111,24 @@ export type BackupResult = { manifestId: string; manifestSha: string; name: stri
  * Copies every file (with its checksum) and then the manifest into the store,
  * named "<app>-<time>". Call it only after writes are stopped.
  */
-export async function runBackup(api: AppwriteApi, store: BackupStore, newId: () => string, onStep: (s: "data" | "files") => void = () => {}): Promise<BackupResult> {
-  onStep("data");
+export async function runBackup(api: AppwriteApi, store: BackupStore, newId: () => string, source: Source, onProgress: () => Promise<void> = async () => {}): Promise<BackupResult> {
+  if (source.appwriteProjectId !== api.project) throw new SafeError("The backup source does not match the app.");
   const snap = await snapshot(api);
   const name = `${api.project}-${new Date().toISOString().replace(/[:.]/g, "-")}`;
-  onStep("files");
   const buckets: Manifest["buckets"] = [];
   for (const { bucket, files } of snap.buckets) {
     const copies: Manifest["buckets"][number]["files"] = [];
     for (const file of files) {
+      await onProgress();
       const bytes = await api.download(bucket.$id, file.$id);
-      if (bytes.length !== file.sizeOriginal) throw new Error(`The file ${file.name} did not download whole.`);
+      if (bytes.length !== file.sizeOriginal) throw new SafeError(`The file ${file.name} did not download whole.`);
       const copyId = newId();
       await store.put(copyId, `${name}__${bucket.$id}__${file.$id}`.slice(0, 255), bytes);
       copies.push({ file, sha256: sha256(bytes), copyId });
     }
     buckets.push({ bucket, files: copies });
   }
-  const manifest: Manifest = { version: MANIFEST_VERSION, takenAt: new Date().toISOString(), counts: countsOf({ ...snap, buckets }), ...snap, buckets };
+  const manifest: Manifest = { version: MANIFEST_VERSION, source, takenAt: new Date().toISOString(), counts: countsOf({ ...snap, buckets }), ...snap, buckets };
   const text = JSON.stringify(manifest);
   const manifestId = newId();
   await store.put(manifestId, `${name}.json`, new TextEncoder().encode(text));
@@ -132,20 +139,29 @@ export async function runBackup(api: AppwriteApi, store: BackupStore, newId: () 
  * Reads the backup back from the store and checks it byte for byte: the
  * manifest's checksum and every file copy's checksum. Returns the manifest.
  */
-export async function verifyBackup(store: BackupStore, manifestId: string, manifestSha: string, expected?: Counts): Promise<Manifest> {
+export async function verifyBackup(
+  store: BackupStore,
+  manifestId: string,
+  manifestSha: string,
+  check: { expected?: Counts; source?: Source; onProgress?: () => Promise<void> } = {},
+): Promise<Manifest> {
   const raw = await store.get(manifestId);
-  if (sha256(raw) !== manifestSha) throw new Error("The backup check failed: the saved list does not match.");
+  if (sha256(raw) !== manifestSha) throw new SafeError("The backup check failed: the saved list does not match.");
   const manifest = JSON.parse(new TextDecoder().decode(raw)) as Manifest;
-  if (manifest.version !== MANIFEST_VERSION) throw new Error("The backup check failed: unknown backup format.");
+  if (manifest.version !== MANIFEST_VERSION) throw new SafeError("The backup check failed: unknown backup format.");
+  if (check.source && (manifest.source?.appwriteProjectId !== check.source.appwriteProjectId || manifest.source?.railwayProjectId !== check.source.railwayProjectId)) {
+    throw new SafeError("The saved backup belongs to another app. Nothing was deleted.");
+  }
   const counts = countsOf(manifest);
   for (const key of Object.keys(counts) as (keyof Counts)[]) {
-    if (counts[key] !== manifest.counts[key] || (expected && counts[key] !== expected[key])) {
-      throw new Error(`The backup check failed: ${key} ${counts[key]} of ${expected?.[key] ?? manifest.counts[key]}.`);
+    if (counts[key] !== manifest.counts[key] || (check.expected && counts[key] !== check.expected[key])) {
+      throw new SafeError(`The backup check failed: ${key} ${counts[key]} of ${check.expected?.[key] ?? manifest.counts[key]}.`);
     }
   }
   for (const { files } of manifest.buckets) {
     for (const f of files) {
-      if (sha256(await store.get(f.copyId)) !== f.sha256) throw new Error(`The backup check failed: the copy of ${f.file.name} does not match.`);
+      await check.onProgress?.();
+      if (sha256(await store.get(f.copyId)) !== f.sha256) throw new SafeError(`The backup check failed: the copy of ${f.file.name} does not match.`);
     }
   }
   return manifest;

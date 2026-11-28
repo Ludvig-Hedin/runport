@@ -1,3 +1,5 @@
+import { SafeError } from "./errors";
+
 // A tiny Appwrite REST client keyed to one project. Plain fetch, so it runs
 // the same in the dashboard (Node) and in the Mac tools and tests (Bun).
 // It returns raw bytes for downloads: the SDK parses JSON files into objects,
@@ -11,10 +13,10 @@ export type AppwriteApi = {
   upload(bucketId: string, fileId: string, name: string, bytes: Uint8Array, permissions?: string[]): Promise<{ $id: string; sizeOriginal: number }>;
 };
 
-export class AppwriteHttpError extends Error {
+export class AppwriteHttpError extends SafeError {
   constructor(readonly status: number, readonly type: string | undefined, readonly path: string) {
-    // Only the method-free path and status: Appwrite messages can echo input.
-    super(`Appwrite answered ${status} for ${path.split("?")[0]}`);
+    // A fixed message: Appwrite's own text can echo inputs.
+    super(`Appwrite refused a request (${status}).`);
   }
 }
 

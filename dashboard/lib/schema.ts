@@ -45,14 +45,24 @@ export const TABLES: TableSpec[] = [
       text("backup", 255, true),
       text("counts", 512, true),
       text("state", 16),
+      text("gen", 16),
       text("owner", 64),
+      text("leaseUntil", 16),
       text("prevStatus", 16),
       text("frozenServices", 512),
+      text("savedKeys", 8000),
       text("manifestId", 64),
       text("manifestSha", 64),
       text("error", 512),
       text("updatedAtMs", 16),
     ],
+  },
+  {
+    // One row per claimed lease generation of a delete. Creating a row is
+    // atomic, so only one run can take a lease over (lib/ops/delete-flow.ts).
+    id: "delete_leases",
+    name: "Delete leases",
+    columns: [text("recordKey", 64, true), text("gen", 16, true)],
   },
   {
     // The deployment a pause stopped, so resume starts exactly that one.

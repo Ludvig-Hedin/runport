@@ -13,12 +13,12 @@ import { config } from "./config";
 import { readSecret, writeSecret } from "./keychain";
 import { loginSmtp } from "./login-smtp";
 import { railwayApi } from "./railway-api";
-import { type KeyPair, syncDashboard } from "./sync-dashboard";
+import { consoleSession, type KeyPair, syncDashboard } from "./sync-dashboard";
 
 const folder = resolve(import.meta.dir, "..", "..", "dashboard");
-type DeployPins = { workspaceId: string; projectId: string; projectName: string; environmentId: string; serviceId: string; appwriteProjectId: string; appwriteProjectName: string; domain: string; port: string };
+type DeployPins = { workspaceId: string; projectId: string; projectName: string; environmentId: string; serviceId: string; appwriteProjectId: string; appwriteProjectName: string; appwriteEndpoint: string; appwriteOrganizationId: string; domain: string; port: string };
 const pins = (await Bun.file(resolve(folder, "runport.deploy.json")).json()) as DeployPins;
-for (const k of ["workspaceId", "projectId", "projectName", "environmentId", "serviceId", "appwriteProjectId", "appwriteProjectName", "domain", "port"] as const) {
+for (const k of ["workspaceId", "projectId", "projectName", "environmentId", "serviceId", "appwriteProjectId", "appwriteProjectName", "appwriteEndpoint", "appwriteOrganizationId", "domain", "port"] as const) {
   if (!pins[k]) throw new Error(`dashboard/runport.deploy.json is missing ${k}. Nothing was changed.`);
 }
 const keysArg = process.argv.find((a) => a.startsWith("--keys="))?.slice("--keys=".length) ?? "all";
@@ -40,6 +40,17 @@ if (!p.environments.edges.some((e) => e.node.id === pins.environmentId && e.node
 if (!p.services.edges.some((s) => s.node.id === pins.serviceId && s.node.name === "web")) throw new Error("The pinned service does not match. Nothing was changed.");
 if (!(await keychain("cloudflare-dns-token"))) throw new Error("No Cloudflare DNS token in Keychain runport-prod. Nothing was changed.");
 console.log("railway targets checked");
+
+// 0b. The Appwrite installation: the pinned address, and the console
+// organization id proves it is this Runport, not another install.
+if (config.endpoint.replace(/\/+$/, "") !== pins.appwriteEndpoint) throw new Error("PLATFORM_APPWRITE_ENDPOINT is not the pinned Appwrite. Nothing was changed.");
+const console_ = await consoleSession();
+try {
+  const teams = await console_.call<{ teams: { $id: string }[] }>("GET", "/teams");
+  if (!teams.teams.some((t) => t.$id === pins.appwriteOrganizationId)) throw new Error("This Appwrite is not the pinned Runport installation. Nothing was changed.");
+} finally {
+  await console_.close();
+}
 
 // 1. The dashboard's Appwrite project. "dashboard" is a reserved slug, and an
 // existing project must be ours (its name and its server key) before any
@@ -79,6 +90,20 @@ console.log("appwrite project ready");
     });
     if (!r.ok) throw new Error(`Could not turn off ${method} sign-in (${r.status}).`);
   }
+  // At most one account: the owner's. Appwrite checks this before its public
+  // code endpoint creates anyone or sends anything, so no stranger can get a
+  // code or an account. The dashboard's own sign-in uses a server key and
+  // checks the owner list itself.
+  const users = await fetch(`${config.endpoint}/users?queries[]=${encodeURIComponent(JSON.stringify({ method: "limit", values: [1] }))}`, {
+    headers: { "X-Appwrite-Project": pins.appwriteProjectId, "X-Appwrite-Key": appwriteKey! },
+  }).then((r) => (r.ok ? (r.json() as Promise<{ total: number }>) : Promise.reject(new Error(`Could not count dashboard users (${r.status}).`))));
+  if (users.total > 1) throw new Error("The dashboard has more than one account. Remove the extra ones first.");
+  const limit = await fetch(`${config.endpoint}/projects/${pins.appwriteProjectId}/auth/limit`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json", "X-Appwrite-Project": "console", Cookie: cookie },
+    body: JSON.stringify({ total: 1 }),
+  });
+  if (!limit.ok) throw new Error(`Could not limit the dashboard to one account (${limit.status}).`);
   await fetch(`${config.endpoint}/account/sessions/current`, { method: "DELETE", headers: { "X-Appwrite-Project": "console", Cookie: cookie } });
 }
 
@@ -145,4 +170,19 @@ if (!process.argv.includes("--no-deploy")) {
   if ((await up.exited) !== 0) throw new Error("railway up failed. Run it again; nothing else changed.");
   console.log("deploy started");
 }
-console.log(`The address ${pins.domain} is already set up; for a new one run: bun src/custom-domain.ts ${pins.domain} web ${pins.port} ${folder} (after checking that folder's Railway link is ${pins.projectName}).`);
+// 7. The address, by pinned ids: present on the pinned service, or set up now.
+type Domains = { serviceInstance: { domains: { customDomains: { domain: string }[] } } | null };
+const domains = await railwayApi<Domains>(
+  "query($s: String!, $e: String!) { serviceInstance(serviceId: $s, environmentId: $e) { domains { customDomains { domain } } } }",
+  { s: pins.serviceId, e: pins.environmentId },
+);
+if (domains.serviceInstance?.domains.customDomains.some((d) => d.domain === pins.domain)) {
+  console.log(`address ${pins.domain} is set`);
+} else {
+  const proc = Bun.spawn(["bun", resolve(import.meta.dir, "custom-domain.ts"), pins.domain, "web", pins.port, folder], {
+    env: { ...process.env, RAILWAY_TARGET_PROJECT: pins.projectId, RAILWAY_TARGET_ENVIRONMENT: pins.environmentId },
+    stdout: "inherit",
+    stderr: "ignore",
+  });
+  if ((await proc.exited) !== 0) throw new Error("Setting up the address failed.");
+}

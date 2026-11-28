@@ -172,14 +172,13 @@ export class AppwriteAdmin {
 }
 
 async function toError(res: Response, context: string): Promise<AppwriteError> {
-  let message = res.statusText;
   let type: string | undefined;
   try {
-    const body = (await res.json()) as { message?: string; type?: string };
-    message = body.message ?? message;
-    type = body.type;
+    type = ((await res.json()) as { type?: string }).type;
   } catch {
-    // Non-JSON error page. Keep the status text.
+    // Non-JSON error page.
   }
-  return new AppwriteError(`${context}: ${message} (${res.status})`, res.status, type);
+  // Only the status and Appwrite's error code: its message text can echo inputs, including secrets.
+  const safeType = type && /^[a-z_]{1,64}$/.test(type) ? ` ${type}` : "";
+  return new AppwriteError(`${context}: Appwrite answered ${res.status}${safeType}.`, res.status, type);
 }

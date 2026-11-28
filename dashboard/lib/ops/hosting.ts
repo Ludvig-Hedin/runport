@@ -1,3 +1,5 @@
+import { SafeError } from "./errors";
+
 // Pause and resume an app's hosting on Railway, tracking the exact
 // deployment that was serving. No I/O of its own: `gql` is injected, so this
 // is tested with fakes.
@@ -8,7 +10,8 @@ export type Deployment = { id: string; status: string; createdAt: string; deploy
 
 /** Serving now, or able to wake up and serve: a running or sleeping deployment. */
 export const isServing = (d: Deployment) => d.status === "SLEEPING" || (d.status === "SUCCESS" && !d.deploymentStopped);
-const isStarting = (d: Deployment) => ["BUILDING", "DEPLOYING", "INITIALIZING", "QUEUED", "WAITING"].includes(d.status);
+/** On its way to serving. */
+export const isStarting = (d: Deployment) => ["BUILDING", "DEPLOYING", "INITIALIZING", "QUEUED", "WAITING", "NEEDS_APPROVAL"].includes(d.status);
 
 export async function deployments(gql: Gql, pins: Pins): Promise<Deployment[]> {
   const data = await gql<{ deployments: { edges: { node: Deployment }[] } }>(
@@ -34,35 +37,74 @@ export function hostingStatus(list: Deployment[]): HostingStatus {
 
 const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
+export type StopOptions = { tries?: number; delayMs?: number; drainMs?: number };
+
 /**
- * Stops every serving deployment (a sleeping one cannot be stopped, so it is
- * removed), then waits until Railway confirms none serves. Returns the one
+ * Stops the hosting completely: cancels anything queued, building or
+ * deploying, stops every serving deployment (a sleeping one cannot be stopped,
+ * so it is removed), waits until Railway confirms nothing serves or starts,
+ * then waits `drainMs` for requests already in flight. Returns the deployment
  * that was serving, to resume later.
  */
-export async function pauseHosting(gql: Gql, pins: Pins, opts: { tries?: number; delayMs?: number } = {}): Promise<Deployment | null> {
-  const serving = (await deployments(gql, pins)).filter(isServing);
-  for (const d of serving) {
-    if (d.status === "SLEEPING") await gql(`mutation($id: String!) { deploymentRemove(id: $id) }`, { id: d.id });
-    else await gql(`mutation($id: String!) { deploymentStop(id: $id) }`, { id: d.id });
-  }
-  for (let i = 0; i < (opts.tries ?? 15); i++) {
-    if (!(await deployments(gql, pins)).some(isServing)) return serving[0] ?? null;
+export async function stopHosting(gql: Gql, pins: Pins, opts: StopOptions = {}): Promise<Deployment | null> {
+  let paused: Deployment | null = null;
+  for (let i = 0; i < (opts.tries ?? 20); i++) {
+    const list = await deployments(gql, pins);
+    const serving = list.filter(isServing);
+    const starting = list.filter(isStarting);
+    if (!serving.length && !starting.length) {
+      if (opts.drainMs) await wait(opts.drainMs);
+      // Check once more after the drain: nothing may have started meanwhile.
+      const after = await deployments(gql, pins);
+      if (!after.some(isServing) && !after.some(isStarting)) return paused;
+      continue;
+    }
+    paused ??= serving[0] ?? null;
+    for (const d of starting) await gql(`mutation($id: String!) { deploymentCancel(id: $id) }`, { id: d.id }).catch(() => {});
+    for (const d of serving) {
+      if (d.status === "SLEEPING") await gql(`mutation($id: String!) { deploymentRemove(id: $id) }`, { id: d.id });
+      else await gql(`mutation($id: String!) { deploymentStop(id: $id) }`, { id: d.id });
+    }
     await wait(opts.delayMs ?? 2000);
   }
-  throw new Error("Railway did not confirm that the app stopped.");
+  throw new SafeError("Railway did not confirm that the app stopped.");
 }
 
-/** Starts the deployment that was paused again, from its existing image. */
+type Owned = Deployment & { projectId: string; environmentId: string; serviceId: string };
+
+/**
+ * Starts the paused deployment again, from its own image. A recorded
+ * deployment is looked up by id when it is not among the newest; if it is
+ * gone or belongs elsewhere, resume refuses rather than start another image.
+ */
 export async function resumeHosting(gql: Gql, pins: Pins, pausedId: string | null): Promise<string> {
   const list = await deployments(gql, pins);
-  if (list.some(isServing)) return list.find(isServing)!.id;
-  const target = (pausedId && list.find((d) => d.id === pausedId)) || list.find((d) => d.status === "SUCCESS" || d.status === "REMOVED" || d.status === "SLEEPING");
-  if (!target) throw new Error("There is no earlier deployment to start again.");
+  const already = list.find(isServing);
+  if (already) return already.id;
+  let target: Deployment | undefined;
+  if (pausedId) {
+    target = list.find((d) => d.id === pausedId);
+    if (!target) {
+      const found = await gql<{ deployment: Owned | null }>(
+        `query($id: String!) { deployment(id: $id) { id status createdAt deploymentStopped projectId environmentId serviceId } }`,
+        { id: pausedId },
+      ).catch(() => ({ deployment: null }));
+      const d = found.deployment;
+      if (!d || d.projectId !== pins.projectId || d.environmentId !== pins.environmentId || d.serviceId !== pins.serviceId) {
+        throw new SafeError("The version that was paused can no longer be found. Deploy the app again.");
+      }
+      target = d;
+    }
+  } else {
+    // Nothing was recorded (paused outside the dashboard): the newest version that ran.
+    target = list.find((d) => d.status === "SUCCESS" || d.status === "REMOVED" || d.status === "SLEEPING");
+  }
+  if (!target) throw new SafeError("There is no earlier version to start again.");
   const out = await gql<{ deploymentRedeploy: { id: string } }>(
     `mutation($id: String!) { deploymentRedeploy(id: $id, usePreviousImageTag: true) { id } }`,
     { id: target.id },
   ).catch(() => {
-    throw new Error("Railway could not start the last version again. Its image may have expired; deploy the app again.");
+    throw new SafeError("Railway could not start the paused version again. Its image may have expired; deploy the app again.");
   });
   return out.deploymentRedeploy.id;
 }

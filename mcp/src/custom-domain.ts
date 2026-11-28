@@ -18,7 +18,15 @@ if (args.length !== 4 || args.some((a) => !a)) throw new Error("Usage: bun src/c
 const [domain, service, port, folder] = args as [string, string, string, string];
 if (!/^[a-z0-9-]+(\.[a-z0-9-]+)+$/.test(domain)) throw new Error(`"${domain}" is not a plain host name.`);
 
+// Optional pinned target: with these set, every domain command names the
+// project and environment by id instead of trusting the folder's link.
+const pinned = [
+  ...(process.env.RAILWAY_TARGET_PROJECT ? ["--project", process.env.RAILWAY_TARGET_PROJECT] : []),
+  ...(process.env.RAILWAY_TARGET_ENVIRONMENT ? ["--environment", process.env.RAILWAY_TARGET_ENVIRONMENT] : []),
+];
+
 async function railway(args: string[]): Promise<string> {
+  if (args[0] === "domain") args = [...args, ...pinned];
   const proc = Bun.spawn(["railway", ...args], { cwd: folder, stdout: "pipe", stderr: "pipe" });
   const [out, err, code] = await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text(), proc.exited]);
   if (code !== 0) throw new Error(`railway ${args[0]} failed: ${(err || out).trim()}`);

@@ -1,4 +1,5 @@
 import { type AppwriteApi } from "./appwrite-rest";
+import { SafeError } from "./errors";
 import { type BackupStore, type Column, type Counts, type Manifest, countsOf, sha256, snapshot, verifyBackup } from "./backup";
 
 // Puts a backup back into an empty Appwrite project: users with their
@@ -33,7 +34,7 @@ function columnRequest(c: Column): { path: string; body: Record<string, unknown>
     case "ip":
       return { path: c.type, body: base };
     default:
-      throw new Error(`Cannot restore a ${c.type} column.`);
+      throw new SafeError(`Cannot restore a ${c.type} column.`);
   }
 }
 
@@ -41,11 +42,11 @@ async function waitForColumns(api: AppwriteApi, path: string): Promise<void> {
   for (let i = 0; i < 60; i++) {
     const table = await api.get<{ columns: { status: string }[]; indexes: { status: string }[] }>(path);
     const all = [...table.columns, ...(table.indexes ?? [])];
-    if (all.some((c) => c.status === "failed")) throw new Error("Appwrite could not create a column or index.");
+    if (all.some((c) => c.status === "failed")) throw new SafeError("Appwrite could not create a column or index.");
     if (all.every((c) => c.status === "available")) return;
     await new Promise((r) => setTimeout(r, 500));
   }
-  throw new Error("Columns did not become ready in time.");
+  throw new SafeError("Columns did not become ready in time.");
 }
 
 /** Strips Appwrite's system fields from a row, leaving the data to write back. */
@@ -56,7 +57,7 @@ function rowData(row: Record<string, unknown>): Record<string, unknown> {
 export async function restoreBackup(store: BackupStore, manifestId: string, manifestSha: string, target: AppwriteApi): Promise<Counts> {
   const manifest = await verifyBackup(store, manifestId, manifestSha);
   const existing = countsOf(await snapshot(target));
-  if (existing.users || existing.tables || existing.files) throw new Error("Restore needs an empty project.");
+  if (existing.users || existing.tables || existing.files) throw new SafeError("Restore needs an empty project.");
 
   for (const u of manifest.users) {
     const body = { userId: u.$id, email: u.email || undefined, name: u.name };
@@ -113,21 +114,21 @@ export async function verifyRestore(manifest: Manifest, target: AppwriteApi): Pr
   const back = await snapshot(target);
   const counts = countsOf(back);
   for (const key of Object.keys(counts) as (keyof Counts)[]) {
-    if (counts[key] !== manifest.counts[key]) throw new Error(`Restore check failed: ${key} ${counts[key]} of ${manifest.counts[key]}.`);
+    if (counts[key] !== manifest.counts[key]) throw new SafeError(`Restore check failed: ${key} ${counts[key]} of ${manifest.counts[key]}.`);
   }
   const want = new Map(manifest.users.map((u) => [u.$id, u]));
   for (const u of back.users) {
     const w = want.get(u.$id);
-    if (!w || w.email !== u.email || (w.password ?? "") !== (u.password ?? "")) throw new Error("Restore check failed: a user differs.");
+    if (!w || w.email !== u.email || (w.password ?? "") !== (u.password ?? "")) throw new SafeError("Restore check failed: a user differs.");
   }
   for (const { bucket, files } of manifest.buckets) {
     for (const f of files) {
-      if (sha256(await target.download(bucket.$id, f.file.$id)) !== f.sha256) throw new Error(`Restore check failed: ${f.file.name} differs.`);
+      if (sha256(await target.download(bucket.$id, f.file.$id)) !== f.sha256) throw new SafeError(`Restore check failed: ${f.file.name} differs.`);
     }
   }
   const rowsWant = new Map(manifest.databases.flatMap((d) => d.tables.flatMap((t) => t.rows.map((r) => [`${d.database.$id}/${t.table.$id}/${r.$id}`, JSON.stringify(rowData(r))]))));
   for (const d of back.databases) for (const t of d.tables) for (const r of t.rows) {
-    if (rowsWant.get(`${d.database.$id}/${t.table.$id}/${r.$id}`) !== JSON.stringify(rowData(r))) throw new Error("Restore check failed: a row differs.");
+    if (rowsWant.get(`${d.database.$id}/${t.table.$id}/${r.$id}`) !== JSON.stringify(rowData(r))) throw new SafeError("Restore check failed: a row differs.");
   }
   return counts;
 }

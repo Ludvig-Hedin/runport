@@ -13,14 +13,15 @@ import { config } from "./config";
 import { readSecret } from "./keychain";
 import { railwayApi } from "./railway-api";
 import { type AppRecord, loadRegistry } from "./registry";
-import { isValidSlug } from "./slug";
+import { isValidSlug, RESERVED_SLUGS } from "./slug";
 
 export type KeyPair = { read: string; write: string };
 export type SyncOptions = { workspaceId: string; mintKeysFor: "all" | Set<string>; existingKeys: Record<string, KeyPair>; extraRegistry?: string };
 type Pinned = { slug: string; name: string; repoUrl: string | null; git: string; workspaceId: string; railwayProjectId: string; environmentId: string; serviceId: string; appwriteProjectId: string; analyticsSiteId: string | null };
 
 export const READ_SCOPES = ["project.read", "users.read", "teams.read", "functions.read", "databases.read", "tables.read", "columns.read", "indexes.read", "rows.read", "buckets.read", "files.read"];
-export const WRITE_SCOPES = ["project.write"];
+/** project.write deletes and switches services; keys.* expires and restores the app's other keys during a delete. */
+export const WRITE_SCOPES = ["project.write", "keys.read", "keys.write"];
 
 const endpoint = () => config.endpoint.replace(/\/+$/, "");
 
@@ -56,6 +57,27 @@ async function railwayLink(app: AppRecord): Promise<{ id: string; name: string; 
   return { id: s.id, name: s.name, environmentId, serviceId };
 }
 
+/**
+ * Proves the Appwrite project belongs to this app before any key is made for
+ * it: the app's own Railway settings must name that project on this Runport,
+ * and the app's own server key must open it.
+ */
+async function proveAppwrite(app: AppRecord, link: { id: string; environmentId: string; serviceId: string }): Promise<void> {
+  if (RESERVED_SLUGS.has(app.projectId) || app.projectId === "dashboard") throw new Error(`${app.slug}: its Appwrite id is reserved for the platform.`);
+  const { variables } = await railwayApi<{ variables: Record<string, string> }>(
+    "query($p: String!, $e: String!, $s: String!) { variables(projectId: $p, environmentId: $e, serviceId: $s) }",
+    { p: link.id, e: link.environmentId, s: link.serviceId },
+  );
+  const sameEndpoint = (variables.APPWRITE_ENDPOINT ?? "").replace(/\/+$/, "") === endpoint();
+  if (!sameEndpoint || variables.APPWRITE_PROJECT_ID !== app.projectId || !variables.APPWRITE_API_KEY) {
+    throw new Error(`${app.slug}: its hosting does not point at Appwrite project ${app.projectId} on this Runport.`);
+  }
+  const opens = await fetch(`${endpoint()}/tablesdb?queries[]=${encodeURIComponent(JSON.stringify({ method: "limit", values: [1] }))}`, {
+    headers: { "X-Appwrite-Project": app.projectId, "X-Appwrite-Key": variables.APPWRITE_API_KEY },
+  });
+  if (!opens.ok) throw new Error(`${app.slug}: the app's own key does not open Appwrite project ${app.projectId} (${opens.status}).`);
+}
+
 /** Lets the dashboard's view-only account see the app's site, through the shared team. */
 async function shareAnalytics(slug: string): Promise<string | null> {
   const base = "https://analytics.runport.app";
@@ -85,7 +107,11 @@ async function shareAnalytics(slug: string): Promise<string | null> {
 
 async function keysFor(app: AppRecord, opts: SyncOptions, session: Awaited<ReturnType<typeof consoleSession>>): Promise<KeyPair | null> {
   const current = opts.existingKeys[app.slug];
-  if (current) {
+  // Reuse only a pair whose write key still has exactly today's scopes.
+  const listedNow = await session.call<{ keys: { name: string; scopes: string[] }[] }>("GET", `/projects/${app.projectId}/keys`);
+  const writeNow = listedNow.keys.find((k) => k.name === "runport-dashboard-write");
+  const scopesOk = !!writeNow && [...writeNow.scopes].sort().join() === [...WRITE_SCOPES].sort().join();
+  if (current && scopesOk) {
     const check = await fetch(`${endpoint()}/project`, { headers: { "X-Appwrite-Project": app.projectId, "X-Appwrite-Key": current.read } });
     if (check.ok && ((await check.json()) as { $id: string }).$id === app.projectId) return current;
   }
@@ -116,6 +142,7 @@ export async function syncDashboard(opts: SyncOptions, dashboardKey: string): Pr
   for (const app of apps) {
     const link = await railwayLink(app);
     if (inWorkspace.get(link.id) !== `${app.slug}-app`) throw new Error(`${app.slug}: its Railway project is not in the Runport workspace.`);
+    await proveAppwrite(app, link);
     pinned.push({
       slug: app.slug, name: app.name, repoUrl: app.repoUrl, git: app.git,
       workspaceId: opts.workspaceId, railwayProjectId: link.id, environmentId: link.environmentId, serviceId: link.serviceId,

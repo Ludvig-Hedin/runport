@@ -1,6 +1,7 @@
 import "server-only";
 import { cache } from "react";
 import { type Deployment, deployments, type HostingStatus, hostingStatus, type Pins } from "@/lib/ops/hosting";
+import { SafeError } from "@/lib/ops/errors";
 import { checkPins, duplicateSlugs, type PinProject } from "@/lib/ops/pins";
 import { loadPins, type AppPins } from "./registry";
 
@@ -25,7 +26,7 @@ export const PLAN_MINIMUM_USD = 20;
 const PLATFORM_PROJECTS = new Set(["runport", "runport-dashboard"]);
 export type { PinProject };
 
-export class RailwayError extends Error {}
+export class RailwayError extends SafeError {}
 
 /** Railway's error text can echo inputs, so only a short reason leaves this function. */
 export async function gql<T>(query: string, variables: Record<string, unknown> = {}): Promise<T> {
@@ -92,7 +93,10 @@ type ProjectsQuery = {
 };
 
 /** Every project in the workspace, once per request. Read only. */
-export const listProjects = cache(async (): Promise<RailwayProject[]> => {
+export const listProjects = cache(() => freshProjects());
+
+/** The same list, fetched now (for checks right before a destructive step). */
+export async function freshProjects(): Promise<RailwayProject[]> {
   const data = await gql<ProjectsQuery>(
     `query($w: String!) { workspace(workspaceId: $w) { projects { edges { node {
       id name
@@ -122,7 +126,7 @@ export const listProjects = cache(async (): Promise<RailwayProject[]> => {
       instances,
     };
   });
-});
+}
 
 export type AppStatus = HostingStatus | "unverified";
 

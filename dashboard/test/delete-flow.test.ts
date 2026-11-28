@@ -1,14 +1,17 @@
 import { expect, test } from "bun:test";
 import type { BackupResult } from "../lib/ops/backup";
-import { DeleteBusy, type DeleteDeps, type DeleteRecord, type DeleteStore, runDelete, STALE_MS } from "../lib/ops/delete-flow";
+import { DeleteBusy, type DeleteDeps, type DeleteRecord, type DeleteStore, LEASE_MS, runDelete, type SavedKey } from "../lib/ops/delete-flow";
+import { SafeError } from "../lib/ops/errors";
 
-// Isolated fixtures: an in-memory lock store and fake services that record
-// every call. Nothing here talks to Appwrite or Railway.
+// Isolated fixtures: an in-memory record and lease store, fake services that
+// record every call, and a clock the test moves. No Appwrite, no Railway.
 
-function memoryStore(): DeleteStore & { rows: Map<string, DeleteRecord> } {
+function memoryStore(): DeleteStore & { rows: Map<string, DeleteRecord>; claims: Set<string> } {
   const rows = new Map<string, DeleteRecord>();
+  const claims = new Set<string>();
   return {
     rows,
+    claims,
     async create(r) {
       if (rows.has(r.key)) return false;
       rows.set(r.key, { ...r });
@@ -21,10 +24,18 @@ function memoryStore(): DeleteStore & { rows: Map<string, DeleteRecord> } {
     async update(key, patch) {
       rows.set(key, { ...rows.get(key)!, ...patch });
     },
+    async claim(key, gen) {
+      const id = `${key}:${gen}`;
+      if (claims.has(id)) return false;
+      claims.add(id);
+      return true;
+    },
   };
 }
 
 const BACKUP: BackupResult = { manifestId: "m1", manifestSha: "sha1", name: "fixture-backup", counts: { users: 2, tables: 1, rows: 3, files: 1, bytes: 10 } };
+const KEYS: SavedKey[] = [{ id: "k-app", name: "fixture-online", scopes: ["rows.write"], expire: null }];
+const SOURCE = { appwriteProjectId: "fixture", railwayProjectId: "rail-1" };
 
 function fakeDeps(store: DeleteStore, over: Partial<DeleteDeps> = {}, clock = { t: 1_000_000 }) {
   const calls: string[] = [];
@@ -37,156 +48,193 @@ function fakeDeps(store: DeleteStore, over: Partial<DeleteDeps> = {}, clock = { 
     store,
     now: () => clock.t,
     newOwner: () => `owner-${++owners}-${Math.random()}`,
+    source: SOURCE,
     preflight: step("preflight"),
-    stopHosting: step("stop", "live"),
-    restartHosting: async (prev) => void calls.push(`restart:${prev}`),
+    currentStatus: step("status", "live"),
+    stopHosting: step("stop"),
+    restartHosting: step("restart"),
     readServices: step("readServices", '["account","tablesdb"]'),
-    freezeWrites: step("freeze"),
+    freezeWrites: async (saved) => void calls.push(`freeze:${saved}`),
     unfreezeWrites: async (saved) => void calls.push(`unfreeze:${saved}`),
+    readKeys: step("readKeys", KEYS),
+    expireKeys: async (k) => void calls.push(`expire:${k.map((x) => x.id)}`),
+    restoreKeys: async (k) => void calls.push(`restoreKeys:${k.map((x) => x.id)}`),
     backup: step("backup", BACKUP),
     verify: async (id, sha) => void calls.push(`verify:${id}:${sha}`),
     deleteData: step("deleteData"),
+    recheckHosting: step("recheck"),
     deleteHosting: step("deleteHosting"),
     ...over,
   };
   return { deps, calls };
 }
 
-test("a delete stops and freezes first, saves the verified backup, then deletes", async () => {
+const run = (deps: DeleteDeps) => runDelete("rail-1", "fixture", deps, () => {});
+
+test("a delete stops everything, then backs up, then deletes, checking the backup before each delete", async () => {
   const store = memoryStore();
   const { deps, calls } = fakeDeps(store);
-  const steps: string[] = [];
-  const record = await runDelete("rail-1", "fixture", deps, (s) => steps.push(s));
-  expect(calls).toEqual(["preflight", "stop", "readServices", "freeze", "backup", "verify:m1:sha1", "deleteData", "deleteHosting"]);
-  expect(steps).toEqual(["stop", "backup", "check", "data", "hosting", "done"]);
+  const record = await run(deps);
+  expect(calls).toEqual([
+    "preflight", "status", "stop", "readServices", 'freeze:["account","tablesdb"]', "readKeys", "expire:k-app",
+    "backup", "verify:m1:sha1",
+    "verify:m1:sha1", "deleteData",
+    "verify:m1:sha1", "recheck", "deleteHosting",
+  ]);
   expect(record.state).toBe("done");
-  expect(store.rows.get("rail-1")).toMatchObject({ state: "done", manifestId: "m1", manifestSha: "sha1", prevStatus: "live" });
 });
 
-test("the verified backup id is saved before anything is deleted", async () => {
+test("each step's before-state is saved before the step acts", async () => {
   const store = memoryStore();
-  let savedWhenDeleting: DeleteRecord | undefined;
+  const seen: Record<string, DeleteRecord | undefined> = {};
   const { deps } = fakeDeps(store, {
-    deleteData: async () => {
-      savedWhenDeleting = store.rows.get("rail-1");
-    },
+    stopHosting: async () => void (seen.stop = store.rows.get("rail-1")),
+    freezeWrites: async () => void (seen.freeze = store.rows.get("rail-1")),
+    expireKeys: async () => void (seen.expire = store.rows.get("rail-1")),
+    deleteData: async () => void (seen.data = store.rows.get("rail-1")),
   });
-  await runDelete("rail-1", "fixture", deps, () => {});
-  expect(savedWhenDeleting).toMatchObject({ state: "backed-up", manifestId: "m1", manifestSha: "sha1" });
+  await run(deps);
+  expect(seen.stop).toMatchObject({ state: "stopping", prevStatus: "live" });
+  expect(seen.freeze?.frozenServices).toBe('["account","tablesdb"]');
+  expect(seen.expire?.savedKeys).toEqual(KEYS);
+  expect(seen.data).toMatchObject({ state: "backed-up", manifestId: "m1", manifestSha: "sha1" });
 });
 
-test("a failed backup deletes nothing and puts the app back", async () => {
+test("a failed backup deletes nothing and puts keys, services and hosting back", async () => {
   const store = memoryStore();
-  const { deps, calls } = fakeDeps(store, { backup: async () => { throw new Error("disk full"); } });
-  await expect(runDelete("rail-1", "fixture", deps, () => {})).rejects.toThrow("disk full");
-  expect(calls).not.toContain("deleteData");
-  expect(calls).not.toContain("deleteHosting");
-  // Only the services that were on come back on.
-  expect(calls).toContain('unfreeze:["account","tablesdb"]');
-  expect(calls).toContain("restart:live");
-  expect(store.rows.get("rail-1")?.state).toBe("aborted");
-});
-
-test("a backup that fails its check deletes nothing", async () => {
-  const store = memoryStore();
-  const { deps, calls } = fakeDeps(store, { verify: async () => { throw new Error("The backup check failed"); } });
-  await expect(runDelete("rail-1", "fixture", deps, () => {})).rejects.toThrow("check failed");
+  const { deps, calls } = fakeDeps(store, { backup: async () => { throw new SafeError("Disk full."); } });
+  await expect(run(deps)).rejects.toThrow("back as it was");
   expect(calls.filter((c) => c.startsWith("delete"))).toEqual([]);
+  expect(calls.slice(-3)).toEqual(["restoreKeys:k-app", 'unfreeze:["account","tablesdb"]', "restart"]);
   expect(store.rows.get("rail-1")?.state).toBe("aborted");
+});
+
+test("if writes cannot be switched back on, the app is not restarted and is marked stuck", async () => {
+  const store = memoryStore();
+  const { deps, calls } = fakeDeps(store, {
+    backup: async () => { throw new SafeError("Disk full."); },
+    unfreezeWrites: async () => { throw new Error("Appwrite down"); },
+  });
+  await expect(run(deps)).rejects.toThrow("needs a check");
+  expect(calls).not.toContain("restart");
+  expect(store.rows.get("rail-1")?.state).toBe("stuck");
 });
 
 test("an app the backup cannot cover is refused before anything changes", async () => {
   const store = memoryStore();
-  const { deps, calls } = fakeDeps(store, { preflight: async () => { throw new Error("It uses 1 team(s)"); } });
-  await expect(runDelete("rail-1", "fixture", deps, () => {})).rejects.toThrow("team");
+  const { deps, calls } = fakeDeps(store, { preflight: async () => { throw new SafeError("It uses 1 team(s)."); } });
+  await expect(run(deps)).rejects.toThrow("team");
   expect(calls).toEqual([]);
   expect(store.rows.get("rail-1")?.state).toBe("aborted");
 });
 
-test("two deletes at once: only one runs, the other is refused", async () => {
+test("two deletes at once: only one runs", async () => {
   const store = memoryStore();
   let release!: () => void;
   const gate = new Promise<void>((r) => (release = r));
   const first = fakeDeps(store, { backup: async () => { await gate; return BACKUP; } });
   const second = fakeDeps(store);
-  const running = runDelete("rail-1", "fixture", first.deps, () => {});
+  const running = run(first.deps);
   await new Promise((r) => setTimeout(r, 5));
-  await expect(runDelete("rail-1", "fixture", second.deps, () => {})).rejects.toBeInstanceOf(DeleteBusy);
+  await expect(run(second.deps)).rejects.toBeInstanceOf(DeleteBusy);
   release();
   await running;
   expect(first.calls.filter((c) => c === "deleteData")).toHaveLength(1);
   expect(second.calls).toEqual([]);
 });
 
-test("a retry after the backup continues only from the saved, re-checked backup", async () => {
+test("a saved step cannot be taken over while its lease is live", async () => {
   const store = memoryStore();
   const clock = { t: 1_000_000 };
-  const first = fakeDeps(store, { deleteData: async () => { throw new Error("Appwrite timed out"); } }, clock);
-  await expect(runDelete("rail-1", "fixture", first.deps, () => {})).rejects.toThrow("backup is saved");
+  await store.create({ key: "rail-1", slug: "fixture", state: "backed-up", gen: 3, owner: "working", leaseUntil: clock.t + 60_000, manifestId: "m1", manifestSha: "sha1", updatedAt: clock.t });
+  const { deps, calls } = fakeDeps(store, {}, clock);
+  await expect(run(deps)).rejects.toBeInstanceOf(DeleteBusy);
+  expect(calls).toEqual([]);
+});
+
+test("a run that lost its lease stops before deleting", async () => {
+  const store = memoryStore();
+  let release!: () => void;
+  const gate = new Promise<void>((r) => (release = r));
+  const { deps, calls } = fakeDeps(store, { backup: async () => { await gate; return BACKUP; } });
+  const running = run(deps);
+  await new Promise((r) => setTimeout(r, 5));
+  // Another run took the lease over meanwhile.
+  await store.update("rail-1", { gen: 99, owner: "someone-else" });
+  release();
+  await expect(running).rejects.toThrow("took over");
+  expect(calls).not.toContain("deleteData");
+  expect(calls).not.toContain("restart");
+});
+
+test("only one of two runs can claim an expired lease", async () => {
+  const store = memoryStore();
+  const clock = { t: 1_000_000 };
+  await store.create({ key: "rail-1", slug: "fixture", state: "backed-up", gen: 1, owner: "crashed", leaseUntil: clock.t - 1, manifestId: "m1", manifestSha: "sha1", updatedAt: 0 });
+  await store.claim("rail-1", 2); // a competing run already claimed generation 2
+  const { deps, calls } = fakeDeps(store, {}, clock);
+  await expect(run(deps)).rejects.toBeInstanceOf(DeleteBusy);
+  expect(calls).toEqual([]);
+});
+
+test("after the lease expires, a retry continues from the saved, re-checked backup", async () => {
+  const store = memoryStore();
+  const clock = { t: 1_000_000 };
+  const first = fakeDeps(store, { deleteData: async () => { throw new Error("timeout"); } }, clock);
+  await expect(run(first.deps)).rejects.toThrow("backup is saved");
   expect(store.rows.get("rail-1")?.state).toBe("backed-up");
-
+  clock.t += LEASE_MS + 1;
   const retry = fakeDeps(store, {}, clock);
-  await runDelete("rail-1", "fixture", retry.deps, () => {});
-  // No new backup, no new stop: the saved one is checked again, then the deletes run.
-  expect(retry.calls).toEqual(["verify:m1:sha1", "deleteData", "deleteHosting"]);
+  await run(retry.deps);
+  expect(retry.calls).toEqual(["verify:m1:sha1", "deleteData", "verify:m1:sha1", "recheck", "deleteHosting"]);
 });
 
-test("a retry refuses to delete without a saved backup id", async () => {
+test("a data-deleted record without a saved backup id removes no hosting", async () => {
   const store = memoryStore();
-  await store.create({ key: "rail-1", slug: "fixture", state: "backed-up", owner: "old", updatedAt: 0 });
+  await store.create({ key: "rail-1", slug: "fixture", state: "data-deleted", gen: 1, owner: "old", leaseUntil: 0, updatedAt: 0 });
   const { deps, calls } = fakeDeps(store);
-  await expect(runDelete("rail-1", "fixture", deps, () => {})).rejects.toThrow("incomplete");
+  await expect(run(deps)).rejects.toThrow("incomplete");
   expect(calls).toEqual([]);
 });
 
-test("a retry whose saved backup no longer checks out deletes nothing", async () => {
+test("a saved backup from another app stops the delete", async () => {
   const store = memoryStore();
-  await store.create({ key: "rail-1", slug: "fixture", state: "backed-up", owner: "old", manifestId: "m1", manifestSha: "sha1", updatedAt: 0 });
-  const { deps, calls } = fakeDeps(store, { verify: async () => { throw new Error("The backup check failed"); } });
-  await expect(runDelete("rail-1", "fixture", deps, () => {})).rejects.toThrow("check failed");
+  await store.create({ key: "rail-1", slug: "fixture", state: "backed-up", gen: 1, owner: "old", leaseUntil: 0, manifestId: "m1", manifestSha: "sha1", updatedAt: 0 });
+  const { deps, calls } = fakeDeps(store, { verify: async () => { throw new SafeError("The saved backup belongs to another app. Nothing was deleted."); } });
+  await expect(run(deps)).rejects.toThrow("another app");
   expect(calls).toEqual([]);
 });
 
-test("a crashed run can be taken over once it is stale, keeping the app stopped", async () => {
+test("a change to the Railway project during the delete keeps the hosting", async () => {
   const store = memoryStore();
-  const clock = { t: 1_000_000 };
-  await store.create({ key: "rail-1", slug: "fixture", state: "frozen", owner: "crashed", prevStatus: "sleeping", frozenServices: '["account"]', updatedAt: clock.t });
-  const early = fakeDeps(store, {}, clock);
-  await expect(runDelete("rail-1", "fixture", early.deps, () => {})).rejects.toBeInstanceOf(DeleteBusy);
+  const { deps, calls } = fakeDeps(store, { recheckHosting: async () => { throw new SafeError("The app's Railway project changed during the delete (1 Railway volume(s)). Its hosting was not removed."); } });
+  await expect(run(deps)).rejects.toThrow("hosting was not removed");
+  expect(calls).not.toContain("deleteHosting");
+  expect(store.rows.get("rail-1")?.state).toBe("data-deleted");
+});
 
-  clock.t += STALE_MS + 1;
-  const later = fakeDeps(store, {}, clock);
-  await runDelete("rail-1", "fixture", later.deps, () => {});
-  // Already stopped by the crashed run: no second stop, freeze again, then the rest.
-  // The services list saved before the first freeze is kept, not re-read from the frozen project.
-  expect(later.calls).toEqual(["freeze", "backup", "verify:m1:sha1", "deleteData", "deleteHosting"]);
-  expect(store.rows.get("rail-1")?.frozenServices).toBe('["account"]');
-  expect(store.rows.get("rail-1")?.prevStatus).toBe("sleeping");
+test("an aborted run is retried from scratch: settings are read again, never reused", async () => {
+  const store = memoryStore();
+  await store.create({ key: "rail-1", slug: "fixture", state: "aborted", gen: 1, owner: "old", leaseUntil: 0, prevStatus: "sleeping", frozenServices: '["storage"]', savedKeys: [], updatedAt: 0 });
+  const { deps, calls } = fakeDeps(store);
+  await run(deps);
+  expect(calls.slice(0, 5)).toEqual(["preflight", "status", "stop", "readServices", 'freeze:["account","tablesdb"]']);
+});
+
+test("a stuck run continues with the settings saved before its freeze", async () => {
+  const store = memoryStore();
+  await store.create({ key: "rail-1", slug: "fixture", state: "stuck", gen: 1, owner: "old", leaseUntil: 0, prevStatus: "live", frozenServices: '["account"]', savedKeys: KEYS, updatedAt: 0 });
+  const { deps, calls } = fakeDeps(store);
+  await run(deps);
+  expect(calls.slice(0, 3)).toEqual(["stop", 'freeze:["account"]', "expire:k-app"]);
+  expect(calls).not.toContain("readServices");
+  expect(calls).not.toContain("readKeys");
 });
 
 test("a finished delete is not run again", async () => {
   const store = memoryStore();
-  await store.create({ key: "rail-1", slug: "fixture", state: "done", owner: "old", updatedAt: 0 });
+  await store.create({ key: "rail-1", slug: "fixture", state: "done", gen: 1, owner: "old", leaseUntil: 0, updatedAt: 0 });
   const { deps, calls } = fakeDeps(store);
-  const record = await runDelete("rail-1", "fixture", deps, () => {});
-  expect(record.state).toBe("done");
+  expect((await run(deps)).state).toBe("done");
   expect(calls).toEqual([]);
-});
-
-test("if reading the service settings fails, nothing is switched off and the app is restarted", async () => {
-  const store = memoryStore();
-  const { deps, calls } = fakeDeps(store, {
-    readServices: async () => { throw new Error("Appwrite did not answer"); },
-  });
-  await expect(runDelete("rail-1", "fixture", deps, () => {})).rejects.toThrow("Appwrite did not answer");
-  expect(calls.some((c) => c.startsWith("unfreeze"))).toBe(false);
-  expect(calls).toContain("restart:live");
-});
-
-test("an abort after a partial freeze switches back on only what was on", async () => {
-  const store = memoryStore();
-  const { deps, calls } = fakeDeps(store, { freezeWrites: async () => { throw new Error("half way"); } });
-  await expect(runDelete("rail-1", "fixture", deps, () => {})).rejects.toThrow("half way");
-  expect(calls).toContain('unfreeze:["account","tablesdb"]');
-  expect(calls).not.toContain("deleteData");
 });
