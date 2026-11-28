@@ -113,9 +113,14 @@ function deleteStore(name: string): DeleteStore {
   };
 }
 
+/** The app's delete record, if any. */
+export async function deleteRecord(app: RunportApp): Promise<DeleteRecord | null> {
+  return deleteStore(app.pins.name).get(app.pins.railwayProjectId);
+}
+
 /** The app's delete record, if one is in progress or stuck. */
 export async function activeDelete(app: RunportApp): Promise<DeleteRecord | null> {
-  const record = await deleteStore(app.pins.name).get(app.pins.railwayProjectId);
+  const record = await deleteRecord(app);
   return record && isActive(record.state) ? record : null;
 }
 
@@ -243,5 +248,13 @@ export function deleteDeps(app: RunportApp): DeleteDeps {
       }
     },
     deleteHosting: () => deleteRailwayProject(app),
+    async forget() {
+      const { tables } = createAdminClient();
+      for (const tableId of ["apps", "app_state"]) {
+        await tables.deleteRow({ databaseId: DATABASE_ID, tableId, rowId: app.pins.slug }).catch((e) => {
+          if (!notFound(e)) throw e;
+        });
+      }
+    },
   };
 }

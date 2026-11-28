@@ -1,6 +1,7 @@
 import "server-only";
 import { visitorsLast7Days, type Visitors } from "./analytics";
-import { activeDelete } from "./app-ops";
+import { deleteRecord } from "./app-ops";
+import { isActive } from "@/lib/ops/delete-flow";
 import { type AppStatus, costByProject, listApps } from "./railway";
 
 // The plain data each app row shows. Built on the server; holds no secrets.
@@ -38,8 +39,11 @@ export function gitInfo(repoUrl: string | null | undefined): GitInfo {
 export async function appRows(): Promise<AppRow[]> {
   const [apps, cost] = await Promise.all([listApps(), costByProject().catch(() => null)]);
   const rows = await Promise.all(
-    apps.map(async (app): Promise<AppRow> => {
-      const active = app.problem ? null : await activeDelete(app).catch(() => null);
+    apps.map(async (app): Promise<AppRow | null> => {
+      const record = await deleteRecord(app).catch(() => null);
+      // A finished delete: the app is gone, even if its list entry was not removed yet.
+      if (record?.state === "done") return null;
+      const active = !app.problem && record && isActive(record.state) ? record : null;
       return {
       slug: app.pins.slug,
       name: app.pins.name,
@@ -54,5 +58,5 @@ export async function appRows(): Promise<AppRow[]> {
       };
     }),
   );
-  return rows.sort((a, b) => a.name.localeCompare(b.name, "en"));
+  return rows.filter((r): r is AppRow => !!r).sort((a, b) => a.name.localeCompare(b.name, "en"));
 }

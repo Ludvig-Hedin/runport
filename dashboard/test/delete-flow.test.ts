@@ -64,6 +64,7 @@ function fakeDeps(store: DeleteStore, over: Partial<DeleteDeps> = {}, clock = { 
     deleteData: step("deleteData"),
     recheckHosting: step("recheck"),
     deleteHosting: step("deleteHosting"),
+    forget: step("forget"),
     ...over,
   };
   return { deps, calls };
@@ -79,7 +80,7 @@ test("a delete stops everything, then backs up, then deletes, checking the backu
     "preflight", "status", "stop", "readServices", 'freeze:["account","tablesdb"]', "readKeys", "expire:k-app",
     "backup", "verify:m1:sha1",
     "verify:m1:sha1", "deleteData",
-    "verify:m1:sha1", "recheck", "deleteHosting",
+    "verify:m1:sha1", "recheck", "deleteHosting", "forget",
   ]);
   expect(record.state).toBe("done");
 });
@@ -186,7 +187,7 @@ test("after the lease expires, a retry continues from the saved, re-checked back
   clock.t += LEASE_MS + 1;
   const retry = fakeDeps(store, {}, clock);
   await run(retry.deps);
-  expect(retry.calls).toEqual(["verify:m1:sha1", "deleteData", "verify:m1:sha1", "recheck", "deleteHosting"]);
+  expect(retry.calls).toEqual(["verify:m1:sha1", "deleteData", "verify:m1:sha1", "recheck", "deleteHosting", "forget"]);
 });
 
 test("a data-deleted record without a saved backup id removes no hosting", async () => {

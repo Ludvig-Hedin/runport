@@ -78,6 +78,8 @@ export type DeleteDeps = {
   /** Re-lists the Railway project and throws if anything was added since the start. */
   recheckHosting(): Promise<void>;
   deleteHosting(): Promise<void>;
+  /** After the delete: drop the app from the dashboard's list. Best effort. */
+  forget(): Promise<void>;
 };
 
 export type DeleteStep = "stop" | "backup" | "check" | "data" | "hosting" | "done";
@@ -216,6 +218,7 @@ export async function runDelete(key: string, slug: string, deps: DeleteDeps, emi
       await deps.recheckHosting();
       await deps.deleteHosting();
       await save({ state: "done" });
+      await deps.forget().catch(() => {});
     }
   } catch (error) {
     if (error instanceof LeaseLost) throw error;
