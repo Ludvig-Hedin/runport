@@ -27,7 +27,7 @@ type Registry = { apps: AppRecord[] };
 export async function loadRegistry(file = registryFile()): Promise<Registry> {
   try {
     const stored = JSON.parse(await readFile(file, "utf8")) as { apps: (Omit<AppRecord, "git"> & { git?: GitHost })[] };
-    return { apps: stored.apps.map((app) => ({ ...app, git: app.git ?? "github" })) };
+    return { ...stored, apps: stored.apps.map((app) => ({ ...app, git: app.git ?? "github" })) };
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return { apps: [] };
     throw error;

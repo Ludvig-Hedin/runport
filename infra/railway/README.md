@@ -161,7 +161,9 @@ PLATFORM_KEYCHAIN_SERVICE=runport-prod bun mcp/src/backfill-app-alerts.ts todo a
 
 The backfill verifies the linked project and its production Railway domain,
 backs up the local registry, and adds the project webhooks without rebuilding
-the apps.
+the apps. It preserves account maintenance enrolment. When rolling out both
+features, deploy the gateway that supports both app registrations before
+running the backfill or the combined monitor.
 
 ### Gateway storage cutover
 

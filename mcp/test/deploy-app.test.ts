@@ -1,14 +1,14 @@
 import { expect, test } from "bun:test";
 import { createHmac } from "node:crypto";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { websiteId } from "../src/analytics";
 
-test("deploy-app provisions analytics and alerts before deploying the app", async () => {
+test.each(["deploy", "backfill"] as const)("%s registers app alerts with the expected scope", async (operation) => {
   const root = await mkdtemp(join(tmpdir(), "runport-deploy-fixture-"));
   try {
-    const slug = "fixture-app";
+    const slug = operation === "backfill" ? "todo" : "fixture-app";
     const domain = "fixture.up.railway.app";
     const folder = join(root, slug);
     const bin = join(root, "bin");
@@ -23,7 +23,7 @@ test("deploy-app provisions analytics and alerts before deploying the app", asyn
     const registrationId = "00000000-0000-0000-0000-000000000006";
     const webhookId = "00000000-0000-0000-0000-000000000005";
     const project = {
-      id: projectId, workspaceId,
+      id: projectId, workspaceId, name: `${slug}-app`,
       environments: { edges: [{ node: { name: "production", id: environmentId } }] },
       services: { edges: [{ node: { name: "web", id: serviceId } }] },
     };
@@ -42,8 +42,11 @@ test("deploy-app provisions analytics and alerts before deploying the app", asyn
       await mkdir(dirname(file), { recursive: true });
       await writeFile(file, data);
     }
-    const initialRegistry = JSON.stringify({ apps: [{ slug, name: "Deployment fixture", projectId: slug, folder, port: 3101,
-      git: "github", repoUrl: null, createdByPlatform: true, createdAt: "2026-11-27T00:00:00Z" }] });
+    const initialRegistry = JSON.stringify({ ...(operation === "backfill" ? { registryPeerField: "kept" } : {}),
+      apps: [{ slug, name: "Deployment fixture", projectId: slug, folder, port: 3101,
+      git: "github", repoUrl: null, createdByPlatform: true, createdAt: "2026-11-27T00:00:00Z",
+      ...(operation === "backfill" ? { peerField: "kept", alerts: { accountMaintenance: true, peerField: "kept" } } : {}),
+    }] });
     await writeFile(registry, initialRegistry);
     await writeFile(join(root, "registry.backup.json"), initialRegistry);
     await writeFile(join(bin, "railway"), `#!${process.execPath}
@@ -78,6 +81,7 @@ globalThis.fetch = async (input, options) => {
   appendFileSync(process.env.FIXTURE_EVENTS, JSON.stringify({ method, url: url.href, body }) + "\\n");
   if (url.href === "https://backboard.railway.com/graphql/v2") {
     if (options.headers.Authorization !== "Bearer fixture-railway-token") throw new Error("Unexpected Railway credential");
+    if (body.query.includes("serviceDomains")) return Response.json({data:{serviceInstance:{domains:{serviceDomains:[{domain:"${domain}"}]}}}});
     if (body.query.includes("notificationRules")) return Response.json({data:{notificationRules:[]}});
     if (body.query.includes("notificationRuleCreate")) return Response.json({data:{notificationRuleCreate:{id:"${webhookId}"}}});
     return Response.json({ data: { serviceInstanceUpdate: true } });
@@ -99,7 +103,8 @@ globalThis.fetch = async (input, options) => {
   throw new Error("Network access outside the isolated deploy fixture: " + url.href);
 };
 `);
-    const proc = Bun.spawn([process.execPath, "--preload", preload, join(import.meta.dir, "../src/deploy-app.ts"), slug], {
+    const script = operation === "backfill" ? "backfill-app-alerts.ts" : "deploy-app.ts";
+    const proc = Bun.spawn([process.execPath, "--preload", preload, join(import.meta.dir, "../src", script), slug], {
       cwd: root,
       env: {
         PATH: [bin, dirname(process.execPath), "/usr/bin", "/bin"].join(":"),
@@ -114,6 +119,18 @@ globalThis.fetch = async (input, options) => {
     const [out, err, exit] = await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text(), proc.exited]);
     if (exit !== 0) throw new Error(out + err);
     const calls = (await readFile(events, "utf8")).trim().split("\n").map(line => JSON.parse(line));
+    if (operation === "backfill") {
+      const call = calls.find(event => event.url === `https://alerts.example.test/_runport/alerts/register/${slug}`);
+      expect(call.body).toEqual({ slug, projectId, environmentId, serviceId, domain });
+      expect(calls.some(event => event.args?.[0] === "up")).toBe(false);
+      const { apps, registryPeerField } = JSON.parse(await readFile(registry, "utf8"));
+      expect(registryPeerField).toBe("kept");
+      expect(apps).toHaveLength(1);
+      expect(apps[0]).toMatchObject({ peerField: "kept", alerts: { accountMaintenance: true, peerField: "kept", registrationId } });
+      const [backup] = (await readdir(root)).filter(name => name.startsWith(".platform.json.alerts-backup-"));
+      expect(await readFile(join(root, backup!), "utf8")).toBe(initialRegistry);
+      return;
+    }
     const siteId = websiteId(slug);
     const analytics = calls.findIndex(call => call.url === "https://analytics.example.test/api/websites");
     const registration = calls.findIndex(call => call.url === `https://alerts.example.test/_runport/alerts/register/${slug}`);

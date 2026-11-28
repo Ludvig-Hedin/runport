@@ -1,6 +1,10 @@
 import { expect, test } from "bun:test";
 import { createAppAlerts, monitorKey, registrationKey, reportKey } from "../src/app-alerts";
 import { createHmac } from "node:crypto";
+import { Database } from "bun:sqlite";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { cloudflareDelivery, DeliveryError, type Deliver } from "../src/deliver";
 import { Limits } from "../src/limits";
 
@@ -18,8 +22,8 @@ const error = { source: "route", kind: "TypeError", fingerprint: "a".repeat(64) 
 const appKey = (app: string) => reportKey(master, app, deployment.serviceId, deployment.environmentId);
 const hour = 60 * 60_000;
 
-function fixture({ total = 100, alertPerApp = 10, recipient = owner, delivery, probe }:
-  { total?: number; alertPerApp?: number; recipient?: string; delivery?: Deliver; probe?: (domain: string) => Promise<boolean> } = {}) {
+function fixture({ total = 100, alertPerApp = 10, recipient = owner, delivery, probe, path = ":memory:" }:
+  { total?: number; alertPerApp?: number; recipient?: string; delivery?: Deliver; probe?: (domain: string) => Promise<boolean>; path?: string } = {}) {
   let now = Date.UTC(2026, 10, 10, 9);
   let failure: Error | undefined;
   const inbox: Array<{ to: string[]; raw: string }> = [];
@@ -29,7 +33,7 @@ function fixture({ total = 100, alertPerApp = 10, recipient = owner, delivery, p
     perAppForm: 50, perHourForm: 10, formShare: 0.1,
   });
   const handle = createAppAlerts({
-    path: ":memory:", master, owner: recipient, limits, clock: () => now, probe,
+    path, master, owner: recipient, limits, clock: () => now, probe,
     deliver: delivery ?? (async ({ to }, raw) => {
       if (failure) throw failure;
       inbox.push({ to, raw: raw.toString() });
@@ -77,6 +81,43 @@ const generation = async (response: Response) => {
   return id!;
 };
 const grace = 60_000;
+
+test.each(["maintenance", "alerts"] as const)("an alert-only update preserves enrolment when %s rolls out first", async (first) => {
+  const directory = await mkdtemp(join(tmpdir(), "runport-registrations-"));
+  const path = join(directory, "alerts.sqlite");
+  try {
+    const registerPath = "/_runport/alerts/register/" + slug;
+    if (first === "maintenance") {
+      using db = new Database(path);
+      db.run(`
+        CREATE TABLE apps (
+          slug TEXT PRIMARY KEY, projectId TEXT NOT NULL, environmentId TEXT NOT NULL, serviceId TEXT NOT NULL,
+          domain TEXT NOT NULL, incident INTEGER, lastIncident INTEGER, registrationId TEXT NOT NULL,
+          accountMaintenance INTEGER NOT NULL DEFAULT 0, peerField TEXT DEFAULT 'kept'
+        )
+      `);
+      db.query(`INSERT INTO apps (slug, projectId, environmentId, serviceId, domain, registrationId, accountMaintenance)
+        VALUES (?, ?, ?, ?, ?, ?, 1)`)
+        .run(slug, deployment.projectId, deployment.environmentId, deployment.serviceId, deployment.domain, crypto.randomUUID());
+    }
+    const f = fixture({ path });
+    if (first === "alerts") {
+      await f.register();
+      expect((await f.request(registerPath, registrationKey(master), { ...deployment, accountMaintenance: true })).status).toBe(204);
+    }
+    using db = new Database(path, { readonly: true });
+    const enrolled = () => db.query("SELECT accountMaintenance FROM apps WHERE slug = ?").values(slug)[0]?.[0];
+    expect(enrolled()).toBe(1);
+    const id = await generation(await f.register());
+    expect(enrolled()).toBe(1);
+    if (first === "maintenance") expect(db.query("SELECT peerField FROM apps").values()).toEqual([["kept"]]);
+    const disabled = await f.request(registerPath, registrationKey(master), { ...deployment, accountMaintenance: false });
+    expect(await generation(disabled)).toBe(id);
+    expect(enrolled()).toBe(0);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
 
 test("retiring and re-registering rotates the Railway receiver while retries reuse it", async () => {
   const f = fixture();

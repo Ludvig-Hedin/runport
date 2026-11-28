@@ -34,8 +34,10 @@ export const reportKey = (master: string, slug: string, serviceId: string, envir
 export const registrationKey = (master: string) => key(master, "register");
 export const monitorKey = (master: string) => key(master, "monitor");
 
-type Registration = { slug: string; projectId: string; environmentId: string; serviceId: string; domain: string };
-type Deployment = Registration & { registrationId: string; registeredAt: number; incident: number | null; lastIncident: number | null };
+type Registration = { slug: string; projectId: string; environmentId: string; serviceId: string; domain: string; accountMaintenance?: boolean };
+type Deployment = Omit<Registration, "accountMaintenance"> & {
+  registrationId: string; registeredAt: number; incident: number | null; lastIncident: number | null; accountMaintenance: number;
+};
 type Report = { source: string; kind: string; fingerprint: string };
 type Observation = { slug: string; registrationId: string; serviceId: string; environmentId: string; status: string; reason: string };
 type Alert = {
@@ -80,12 +82,13 @@ const record = (value: unknown): value is Record<string, unknown> =>
 
 function registration(value: unknown, slug: string): Registration | undefined {
   if (!record(value) || value.slug !== slug) return;
-  const { projectId, environmentId, serviceId, domain } = value;
+  const { projectId, environmentId, serviceId, domain, accountMaintenance } = value;
   if (typeof projectId !== "string" || !UUID.test(projectId) ||
     typeof environmentId !== "string" || !UUID.test(environmentId) ||
     typeof serviceId !== "string" || !UUID.test(serviceId) ||
     typeof domain !== "string" || !/^[a-z0-9][a-z0-9-]{0,62}\.up\.railway\.app$/.test(domain)) return;
-  return { slug, projectId, environmentId, serviceId, domain };
+  if (accountMaintenance !== undefined && typeof accountMaintenance !== "boolean") return;
+  return { slug, projectId, environmentId, serviceId, domain, accountMaintenance };
 }
 
 function errorReport(value: unknown): Report | undefined {
@@ -118,7 +121,8 @@ export function createAppAlerts({ path, master, owner, limits, deliver, log, clo
   db.run(`
     CREATE TABLE IF NOT EXISTS apps (
       slug TEXT PRIMARY KEY, projectId TEXT NOT NULL, environmentId TEXT NOT NULL, serviceId TEXT NOT NULL,
-      domain TEXT NOT NULL, incident INTEGER, lastIncident INTEGER, registrationId TEXT NOT NULL
+      domain TEXT NOT NULL, incident INTEGER, lastIncident INTEGER, registrationId TEXT NOT NULL,
+      accountMaintenance INTEGER NOT NULL DEFAULT 0
     );
     CREATE TABLE IF NOT EXISTS alerts (
       id TEXT PRIMARY KEY, slug TEXT NOT NULL, category TEXT NOT NULL, detail TEXT NOT NULL,
@@ -142,6 +146,7 @@ export function createAppAlerts({ path, master, owner, limits, deliver, log, clo
       db.query<{ name: string }, []>(`PRAGMA table_info(${table})`).all().map((entry) => entry.name),
     );
     const appColumns = names("apps");
+    if (!appColumns.has("accountMaintenance")) db.run("ALTER TABLE apps ADD COLUMN accountMaintenance INTEGER NOT NULL DEFAULT 0");
     if (!appColumns.has("lastIncident")) db.run("ALTER TABLE apps ADD COLUMN lastIncident INTEGER");
     if (!appColumns.has("registeredAt")) db.run("ALTER TABLE apps ADD COLUMN registeredAt INTEGER NOT NULL DEFAULT 0");
     if (!appColumns.has("registrationId")) {
@@ -414,10 +419,14 @@ export function createAppAlerts({ path, master, owner, limits, deliver, log, clo
     if (action === "register") {
       const app = registration(input, slug);
       if (!app) return status(400);
-      const stored = db.query<{ registrationId: string }, [string, string, string, string, string, string, number]>(`
-        INSERT INTO apps (slug, projectId, environmentId, serviceId, domain, registrationId, registeredAt) VALUES (?, ?, ?, ?, ?, ?, ?)
+      // NULL means the caller omitted maintenance enrolment. Existing
+      // registrations keep it, and new apps start unenrolled.
+      const stored = db.query<{ registrationId: string }, [string, string, string, string, string, string, number, number | null]>(`
+        INSERT INTO apps (slug, projectId, environmentId, serviceId, domain, registrationId, registeredAt, accountMaintenance)
+        VALUES (?, ?, ?, ?, ?, ?, ?, COALESCE(?8, 0))
         ON CONFLICT (slug) DO UPDATE SET projectId = excluded.projectId, environmentId = excluded.environmentId,
         serviceId = excluded.serviceId, domain = excluded.domain,
+        accountMaintenance = COALESCE(?8, apps.accountMaintenance),
         incident = CASE WHEN serviceId = excluded.serviceId AND environmentId = excluded.environmentId AND projectId = excluded.projectId THEN incident ELSE NULL END,
         lastIncident = CASE WHEN serviceId = excluded.serviceId AND environmentId = excluded.environmentId AND projectId = excluded.projectId THEN lastIncident ELSE NULL END,
         registeredAt = CASE WHEN serviceId = excluded.serviceId AND environmentId = excluded.environmentId AND projectId = excluded.projectId
@@ -425,7 +434,8 @@ export function createAppAlerts({ path, master, owner, limits, deliver, log, clo
         registrationId = CASE WHEN serviceId = excluded.serviceId AND environmentId = excluded.environmentId AND projectId = excluded.projectId
           THEN registrationId ELSE excluded.registrationId END
         RETURNING registrationId
-      `).get(slug, app.projectId, app.environmentId, app.serviceId, app.domain, crypto.randomUUID(), clock())!;
+      `).get(slug, app.projectId, app.environmentId, app.serviceId, app.domain, crypto.randomUUID(), clock(),
+        app.accountMaintenance === undefined ? null : Number(app.accountMaintenance))!;
       return new Response(null, { status: 204, headers: { "X-Runport-Registration-Id": stored.registrationId } });
     }
     const event = errorReport(input);

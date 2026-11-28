@@ -38,7 +38,7 @@ for (const { app, project, domain } of prepared) {
   const { registration } = await registerAppAlerts(app.slug, project, domain);
   const current = (await loadRegistry(store)).apps.find(record => record.slug === app.slug);
   if (!current || current.folder !== app.folder) throw new Error(`App registry changed during backfill for ${app.slug}.`);
-  await upsertApp({ ...current, alerts: registration });
+  await upsertApp({ ...current, alerts: { ...current.alerts, ...registration } });
   console.log(`Registered Railway app alerts for ${app.slug}.`);
 }
 const after = await loadRegistry(store);
