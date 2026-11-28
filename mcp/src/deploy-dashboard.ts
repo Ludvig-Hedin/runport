@@ -101,6 +101,26 @@ await admin.setProjectSmtp(SLUG, {
   username: SLUG,
   password: new Bun.CryptoHasher("sha256", masterKey).update(`mail-gateway:${SLUG}`).digest("hex"),
 });
+// Only email codes may sign in: no passwords, links, phone or anonymous
+// accounts, so nobody can make an account for the owner's address another way.
+{
+  const session = await fetch(`${config.endpoint}/account/sessions/email`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "X-Appwrite-Project": "console" },
+    body: JSON.stringify({ email: await readSecret("appwrite-owner-email"), password: await readSecret("appwrite-owner-password") }),
+  });
+  if (!session.ok) throw new Error(`Appwrite console sign-in failed (HTTP ${session.status}).`);
+  const cookie = session.headers.getSetCookie().map((c) => c.split(";")[0]).join("; ");
+  for (const method of ["email-password", "magic-url", "anonymous", "invites", "phone"]) {
+    const res = await fetch(`${config.endpoint}/projects/${SLUG}/auth/${method}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json", "X-Appwrite-Project": "console", Cookie: cookie },
+      body: JSON.stringify({ enabled: false }),
+    });
+    if (!res.ok) throw new Error(`Could not turn off ${method} sign-in (HTTP ${res.status}).`);
+  }
+  await fetch(`${config.endpoint}/account/sessions/current`, { method: "DELETE", headers: { "X-Appwrite-Project": "console", Cookie: cookie } });
+}
 let appwriteKey = await keychain("dashboard-appwrite-key");
 if (!appwriteKey) {
   appwriteKey = (await admin.createServerKey(SLUG, "dashboard-online")).secret;

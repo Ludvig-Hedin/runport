@@ -1,13 +1,15 @@
 import "server-only";
 import { appRows } from "@/lib/server/overview";
 import { AppListClient } from "./app-list-client";
+import { logFailure } from "./facts";
 import { BlockError } from "./retry";
 
 export async function AppList() {
   try {
     const rows = await appRows();
     return <AppListClient initialRows={rows} now={Date.now()} />;
-  } catch {
+  } catch (error) {
+    logFailure("apps", error);
     return <BlockError what="your apps" />;
   }
 }

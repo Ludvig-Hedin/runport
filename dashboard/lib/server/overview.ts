@@ -57,7 +57,7 @@ export async function appRows(): Promise<AppRow[]> {
         name: names.get(app.slug) ?? m?.name ?? app.slug,
         url: app.url,
         status: appStatus(app.web),
-        lastDeployAt: app.web.latestDeployment?.createdAt ?? null,
+        lastDeployAt: (app.web.latestDeployment ?? app.web.lastDeployment)?.createdAt ?? null,
         costUsd: cost ? (cost.get(app.project.id) ?? 0) : null,
         visitors: await visitorsLast7Days(app.slug, app.analyticsSiteId),
         git: gitInfo(m?.repoUrl),

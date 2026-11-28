@@ -4,6 +4,11 @@ import { lastBackup, PLAN_MINIMUM_USD, runportCost } from "@/lib/server/railway"
 import { ago, exactTime, money, shortDate } from "./format";
 import { BlockError } from "./retry";
 
+/** Logs why a block failed. Messages come from our own code and APIs, never secrets. */
+export function logFailure(block: string, error: unknown): void {
+  console.error(`[dashboard] ${block}: ${error instanceof Error ? error.message : String(error)}`);
+}
+
 // The three facts at the top: cost, last backup and platform health. Each is
 // its own async component, so one slow or failing source never holds up the rest.
 
@@ -44,7 +49,8 @@ export async function CostFact() {
         </p>
       </Fact>
     );
-  } catch {
+  } catch (error) {
+    logFailure("cost", error);
     return (
       <Fact label="Cost this month">
         <BlockError what="the cost" />
@@ -78,7 +84,8 @@ export async function BackupFact() {
         </p>
       </Fact>
     );
-  } catch {
+  } catch (error) {
+    logFailure("backup", error);
     return (
       <Fact label="Last backup">
         <BlockError what="the backup status" />
@@ -92,10 +99,11 @@ const WORD = { ok: "Working", down: "Down", unknown: "Unknown" } as const;
 export async function HealthFact() {
   try {
     const parts = await platformHealth();
-    const problems = parts.filter((p) => p.state !== "ok").length;
+    const problems = parts.filter((p) => p.state === "down").length;
+    const unknown = parts.filter((p) => p.state === "unknown").length;
     return (
       <Fact label="Platform">
-        <p className="db-fact-value">{problems === 0 ? "All working" : problems === 1 ? "1 problem" : `${problems} problems`}</p>
+        <p className="db-fact-value">{problems === 1 ? "1 problem" : problems > 1 ? `${problems} problems` : unknown ? "Partly unknown" : "All working"}</p>
         <ul className="db-health">
           {parts.map((p) => (
             <li key={p.name} title={p.detail}>
@@ -107,7 +115,8 @@ export async function HealthFact() {
         </ul>
       </Fact>
     );
-  } catch {
+  } catch (error) {
+    logFailure("health", error);
     return (
       <Fact label="Platform">
         <BlockError what="platform health" />

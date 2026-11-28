@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useId, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useState } from "react";
 import type { Inventory } from "@/lib/server/app-data";
 import type { AppRow } from "@/lib/server/overview";
 import { bytes, plural } from "./format";
@@ -19,17 +19,24 @@ type Run =
   | { state: "failed"; step: Step; error: string; deleted: boolean }
   | { state: "done"; backup: string };
 
-type Props = { row: AppRow; onClose: () => void; onDeleted: (row: AppRow, backup: string) => void };
+type Props = {
+  row: AppRow;
+  /** False once the address no longer asks for the sheet, for example after the back gesture. */
+  visible: boolean;
+  /** Asks the parent to close (it drops ?delete= from the address). */
+  onRequestClose: () => void;
+  /** Called after the closing glide, to unmount. */
+  onClosed: () => void;
+  onDeleted: (row: AppRow, backup: string) => void;
+};
 
-export function DeleteSheet({ row, onClose, onDeleted }: Props) {
+export function DeleteSheet({ row, visible, onRequestClose, onClosed, onDeleted }: Props) {
   const [open, setOpen] = useState(false);
   const [inventory, setInventory] = useState<Inventory | null>(null);
   const [countError, setCountError] = useState<string | null>(null);
   const [typed, setTyped] = useState("");
   const [run, setRun] = useState<Run>({ state: "idle" });
   const titleId = useId();
-  const inputRef = useRef<HTMLInputElement>(null);
-  const pushed = useRef(false);
   const running = run.state === "running";
 
   const loadCounts = useCallback(async () => {
@@ -45,44 +52,31 @@ export function DeleteSheet({ row, onClose, onDeleted }: Props) {
     }
   }, [row.slug]);
 
-  // Glide in on the next frame, so the opening state is painted first.
   useEffect(() => {
-    const frame = requestAnimationFrame(() => setOpen(true));
     void loadCounts();
-    history.pushState({ deleteSheet: row.slug }, "");
-    pushed.current = true;
-    return () => cancelAnimationFrame(frame);
-  }, [loadCounts, row.slug]);
+  }, [loadCounts]);
 
-  const close = useCallback(
-    (fromBack = false) => {
-      if (running) return;
-      setOpen(false);
-      if (pushed.current && !fromBack) history.back();
-      pushed.current = false;
-      setTimeout(onClose, 380);
-    },
-    [onClose, running],
-  );
+  // Glide in on the next frame, so the closed state is painted first; glide
+  // out when the address drops the sheet, then unmount.
+  useEffect(() => {
+    if (visible || running) {
+      const frame = requestAnimationFrame(() => setOpen(true));
+      return () => cancelAnimationFrame(frame);
+    }
+    setOpen(false);
+    const t = setTimeout(onClosed, 380);
+    return () => clearTimeout(t);
+  }, [visible, running, onClosed]);
 
-  // Escape and the phone's back gesture close the sheet, except while deleting.
+  const close = useCallback(() => {
+    if (!running) onRequestClose();
+  }, [running, onRequestClose]);
+
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => e.key === "Escape" && close();
-    const onPop = () => {
-      if (running) {
-        history.pushState({ deleteSheet: row.slug }, "");
-        return;
-      }
-      pushed.current = false;
-      close(true);
-    };
     document.addEventListener("keydown", onKey);
-    window.addEventListener("popstate", onPop);
-    return () => {
-      document.removeEventListener("keydown", onKey);
-      window.removeEventListener("popstate", onPop);
-    };
-  }, [close, running, row.slug]);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [close]);
 
   const matches = typed.trim().toLowerCase() === row.name.trim().toLowerCase();
   const canDelete = matches && !!inventory && run.state !== "running" && run.state !== "done";
@@ -114,15 +108,7 @@ export function DeleteSheet({ row, onClose, onDeleted }: Props) {
           if (event.step === "error") throw Object.assign(new Error(event.error), { deleted: !!event.deleted });
           if (event.step === "done") {
             setRun({ state: "done", backup: event.backup ?? "" });
-            pushed.current = false;
-            history.back();
-            setTimeout(() => {
-              setOpen(false);
-              setTimeout(() => {
-                onDeleted(row, event.backup ?? "");
-                onClose();
-              }, 380);
-            }, 900);
+            setTimeout(() => onDeleted(row, event.backup ?? ""), 900);
             return;
           }
           step = event.step;
@@ -222,7 +208,6 @@ export function DeleteSheet({ row, onClose, onDeleted }: Props) {
                 Type <strong>{row.name}</strong> to confirm
               </label>
               <input
-                ref={inputRef}
                 id="confirm-name"
                 className="db-input"
                 value={typed}

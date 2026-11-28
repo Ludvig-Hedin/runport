@@ -33,7 +33,7 @@ Vercel, Clerk, Convex or Resend.
 | Backups and outage alerts | Nightly database backup kept 14 days; email alerts every 5 minutes |
 | Own addresses (`*.runport.app`) | Admin live at admin.runport.app; app addresses via custom-domain.ts |
 | Newsletters | Not yet: Cloudflare is for transactional mail |
-| Own admin panel | Not started; Appwrite's admin is used meanwhile |
+| Own dashboard | dash.runport.app: every app's status, visitors and cost, pause and delete ([dashboard/](dashboard/CLAUDE.md)) |
 
 ## Layout
 
@@ -44,6 +44,7 @@ infra/cloudflare-mail/ Worker that sends the gateway's mail with Cloudflare
 infra/railway/       the online setup as code, backup and outage jobs
 mcp/                 runport MCP server (Bun, TypeScript)
 templates/           Next.js starter kit copied into each new app
+dashboard/           Runport's own start page (dash.runport.app), a Runport app itself
 docs/                plans, research and spike results
 brand/               logo
 ```

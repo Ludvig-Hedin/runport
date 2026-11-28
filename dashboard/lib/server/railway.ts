@@ -58,6 +58,8 @@ export type RailwayService = {
   environmentId: string;
   sleepApplication: boolean;
   latestDeployment: Deployment | null;
+  /** When nothing is running (a paused app), its last deployment, used to resume. */
+  lastDeployment?: Deployment | null;
   domains: string[];
 };
 
@@ -166,6 +168,15 @@ async function toRunportApp(project: RailwayProject): Promise<RunportApp | null>
   const web = project.services.find((s) => s.name === "web");
   if (!web) return null;
   const vars = await serviceVariables(project.id, project.environmentId, web.id);
+  if (!web.latestDeployment) {
+    const last = await gql<{ deployments: { edges: { node: Deployment }[] } }>(
+      `query($p: String!, $e: String!, $s: String!) {
+        deployments(first: 1, input: { projectId: $p, environmentId: $e, serviceId: $s }) { edges { node { id status createdAt deploymentStopped } } }
+      }`,
+      { p: project.id, e: project.environmentId, s: web.id },
+    );
+    web.lastDeployment = last.deployments.edges[0]?.node ?? null;
+  }
   if ((vars.APPWRITE_ENDPOINT ?? "").replace(/\/+$/, "") !== runportEndpoint() || vars.APPWRITE_PROJECT_ID !== slug || !vars.APPWRITE_API_KEY) {
     return null;
   }
@@ -196,7 +207,8 @@ export type AppStatus = "live" | "sleeping" | "down" | "deploying" | "paused" | 
 
 export function appStatus(web: RailwayService): AppStatus {
   const d = web.latestDeployment;
-  if (!d) return "unknown";
+  // Nothing running but an earlier deployment exists: paused by removal.
+  if (!d) return web.lastDeployment ? "paused" : "unknown";
   switch (d.status) {
     case "SLEEPING":
       return "sleeping";
@@ -311,16 +323,21 @@ export async function lastBackup(): Promise<BackupResult | null> {
 
 // --- Actions -------------------------------------------------------------
 
-/** Stops the app's running deployment. Visitors get Railway's "not found" until resumed. */
+/**
+ * Stops the app so visitors get Railway's "not found" until it is resumed. A
+ * sleeping deployment cannot be stopped, so it is removed instead; both kinds
+ * come back with resumeApp().
+ */
 export async function pauseApp(app: RunportApp): Promise<void> {
   const d = app.web.latestDeployment;
-  if (!d) throw new RailwayError("This app has no deployment to pause.");
-  await gql(`mutation($id: String!) { deploymentStop(id: $id) }`, { id: d.id });
+  if (!d) throw new RailwayError("This app is already paused.");
+  if (d.status === "SLEEPING") await gql(`mutation($id: String!) { deploymentRemove(id: $id) }`, { id: d.id });
+  else await gql(`mutation($id: String!) { deploymentStop(id: $id) }`, { id: d.id });
 }
 
 /** Starts the last deployment again, from the image it already has. */
 export async function resumeApp(app: RunportApp): Promise<void> {
-  const d = app.web.latestDeployment;
+  const d = app.web.latestDeployment ?? app.web.lastDeployment;
   if (!d) throw new RailwayError("This app has no deployment to resume.");
   await gql(`mutation($id: String!) { deploymentRedeploy(id: $id, usePreviousImageTag: true) { id } }`, { id: d.id });
 }

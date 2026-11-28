@@ -1,81 +1,57 @@
-# This app
+# Runport dashboard
 
-Next.js (App Router) + Appwrite, created by the `runport` tool. The backend
-(accounts, database, files) is an Appwrite project that already exists. Do not
-sign up for other services for accounts or data.
+Runport's own start page at https://dash.runport.app: every app with its
+status, visitors, cost, last deploy and repo, plus Runport's cost against the
+$20 plan minimum, the last nightly backup and platform health. Pause, resume
+and delete per app. It is a Runport app itself, built from
+`templates/nextjs-appwrite`, so the starter's rules below still apply.
 
-## Run
+## Who gets in
 
-```bash
-bun install
-bun run setup   # creates missing tables from lib/schema.ts, safe to rerun
-bun run dev     # the port is in .env.local as PORT when the platform started it
-```
+Only emails in `DASHBOARD_OWNER_EMAILS` (comma-separated). Sign-in is the
+email code only: `lib/config.ts` forces it, `lib/code-auth.ts` sends no code
+to other addresses (they see `/no-access`), and `lib/owner.ts` checks every
+page and every `/api/apps/*` route. The dashboard's Appwrite project has
+password, magic link, phone, invite and anonymous sign-in turned off.
 
-`.env.local` holds `APPWRITE_ENDPOINT`, `APPWRITE_PROJECT_ID` and
-`APPWRITE_API_KEY`. It is gitignored. Never commit it or print the key.
+## Where the data comes from (all on the server)
 
-## How it is built
-
-- **All Appwrite calls run on the server** (server components and server
-  actions). Do not use the Appwrite web SDK in the browser.
-- `lib/appwrite.ts`: `createSessionClient()` acts as the signed-in user, so row
-  permissions apply. `createAdminClient()` has full project rights; use it only
-  for sign-up, sign-in and setup.
-- Sign-in: `lib/code-auth.ts` (email code), `lib/auth.ts` (password, reset,
-  sign out), `lib/oauth.ts` + `app/auth/oauth/[state]/route.ts` (Google, GitHub).
-  `lib/session.ts`: `getUser()` and the session cookie.
-- **Auth screens are ready-made components** in `components/auth`, used like
-  Clerk's: `<SignIn />`, `<SignUp />`, `<ForgotPassword />`,
-  `<ResetPassword />`, `<SiteUnlock />`, `<UserButton />`, and
-  `<SignedIn>` / `<SignedOut>` wrappers. Do not rebuild these screens; style
-  them in `runport.config.ts`:
-  - `appearance.variables`: colours (one value or `{ light, dark }`),
-    `borderRadius`, `buttonRadius`, `fontFamily`.
-  - `appearance.layout`: `logoUrl`, `socialButtonsPlacement` (`top` or
-    `bottom`), `card` (`raised` or `flat`).
-  - `appearance.elements`: extra Tailwind classes per part (`card`, `title`,
-    `input`, `primaryButton`, `socialButton`, `userButtonAvatar`, …; the full
-    list is `ELEMENTS` in `components/auth/appearance.ts`). They win over the
-    built-in styles without `!`.
-  - `appName` and `routes.afterSignIn` / `routes.afterSignOut`.
-  Any component also takes an `appearance` prop for a one-off look.
-- **Cookie consent** is built in (`components/consent`). No banner shows while
-  `consent.categories` in `runport.config.ts` is empty, which is right for an
-  app that only has its sign-in cookies. When you add something that sets
-  other cookies (an ad pixel, a chat widget), add its category there and load
-  it inside `<ConsentGate category="marketing">`, or check
-  `useConsent("marketing")`. Put `<CookieSettingsLink />` in the footer.
-- `proxy.ts` runs before every request: the site lock and the noindex header.
-- `lib/rate-limit.ts` caps every sign-in and unlock step per email and visitor.
-  The admin key skips Appwrite's own limits, so keep new auth actions behind
-  `allowed()` too.
-- Data uses Appwrite TablesDB. Tables are declared in `lib/schema.ts`. To add a
-  table or column, add it there and run `bun run setup`.
-- Tables have row security on. A row created with the session client belongs
-  to that user only. For shared data, pass explicit `permissions` to `createRow`.
-- `app/items` is the example feature. Replace or rename it freely.
-
-## Switches (env vars)
-
-All are read in `lib/config.ts`. Set them in `.env.local` locally or in the
-host's variables, then restart or redeploy.
-
-| Var | Default | Effect |
+| What | Source | File |
 | --- | --- | --- |
-| `AUTH_MODE` | `email-code` | `email-code`: /login emails a 6-digit code and creates new accounts; /signup redirects to /login. `password`: email + password with /signup, /forgot and /reset. |
-| `AUTH_GOOGLE`, `AUTH_GITHUB` | off | `1` shows that button on /login. The platform sets the provider keys in Appwrite. |
-| `APP_URL` | `http://localhost:$PORT` | Public address for OAuth and reset links. Its host must be a platform in the Appwrite project. |
-| `SITE_PASSWORD` | unset | Locks every page behind /unlock. Changing it signs every visitor out of the lock. |
-| `ALLOW_INDEXING` | off | `1` lets search engines index the site, but only when `RAILWAY_ENVIRONMENT_NAME` is unset or `production` and the site is not locked. Otherwise robots.txt, the meta tag and an `X-Robots-Tag` header say noindex. |
+| Apps, status, deploy time, cost, pause, delete hosting | Railway GraphQL, workspace token `RAILWAY_API_TOKEN` | `lib/server/railway.ts` |
+| Last backup | the `backup` job's own log lines on Railway | `lib/server/railway.ts` |
+| Visitors | Umami at `ANALYTICS_URL`, admin login `ANALYTICS_ADMIN_PASSWORD` | `lib/server/analytics.ts` |
+| App names, delete users/data/files | Appwrite console, `APPWRITE_CONSOLE_EMAIL` / `_PASSWORD` | `lib/server/appwrite-console.ts` |
+| Backup before delete | the app's own key (from its Railway variables) → this project's `app-backups` bucket | `lib/server/app-data.ts` |
+| Repo links | `apps` table, filled from the Mac's app list by `bun run sync-apps` | `scripts/sync-apps.ts` |
 
-## Appwrite MCP
+A Railway project counts as an app only when it is `<slug>-app` with a `web`
+service pointing at this Runport's Appwrite with project `<slug>`
+(`toRunportApp`). Actions never touch anything else, the `runport` project or
+the dashboard itself.
 
-If `.mcp.json` exists, the Appwrite MCP server is scoped to this app's project
-only. Use it to inspect tables, rows and users.
+## Delete
+
+`app/api/apps/[slug]/delete/route.ts` streams its steps as JSON lines:
+backup (users, rows, files copied into `app-backups`, plus a manifest
+`<slug>-<time>.json`), check (read back and compare counts and file sizes),
+delete the Appwrite project, delete the Railway project, then a row in
+`deletions`. Nothing is deleted when the backup or its check fails. The repo,
+the folder on the Mac and the visitor stats are kept.
+
+## Deploy
+
+From `mcp/`: `PLATFORM_KEYCHAIN_SERVICE=runport-prod
+PLATFORM_APPWRITE_ENDPOINT=https://admin.runport.app/v1 bun src/deploy-dashboard.ts`.
+It creates or reuses the Railway project `runport-dashboard`, the Appwrite
+project `dashboard`, tables and bucket, and sets every variable from Keychain
+`runport-prod` through Railway's API. The Railway token must be made by a
+person (Railway account settings > Tokens, workspace token) and stored as
+`dashboard-railway-token` in that Keychain service.
 
 ## Rules
 
-- Keep the app's own cookie auth. It works when the app and Appwrite are on
-  different domains.
-- Check `bun run typecheck` and `bun run build` before saying something works.
+- Never print or log a token or key. `logFailure` logs only error messages.
+- Keep the look in `components/dashboard/dashboard.css` and the tokens in
+  `app/globals.css` (house style, light and dark).
+- Check `bun run typecheck` before deploying.

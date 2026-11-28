@@ -280,6 +280,10 @@
     align-items: center;
     gap: 8px;
   }
+  .db-app-hint {
+    max-width: none;
+    text-align: left;
+  }
   .db-app-stats {
     grid-template-columns: repeat(4, minmax(0, 1fr));
   }

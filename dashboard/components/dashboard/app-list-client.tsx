@@ -1,6 +1,6 @@
 "use client";
 
-import { useRouter } from "next/navigation";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { AppRow } from "@/lib/server/overview";
 import type { AppStatus } from "@/lib/server/railway";
@@ -24,7 +24,29 @@ export function AppListClient({ initialRows, now }: { initialRows: AppRow[]; now
   const [rows, setRows] = useState(initialRows);
   const [busy, setBusy] = useState<Busy>(null);
   const [rowError, setRowError] = useState<{ slug: string; message: string } | null>(null);
+  // The delete sheet lives in the address (?delete=<slug>), so the phone's
+  // back gesture closes it through the router like any other page.
+  const params = useSearchParams();
+  const pathname = usePathname();
+  const wanted = params.get("delete");
   const [deleting, setDeleting] = useState<AppRow | null>(null);
+  const openedHere = useRef(false);
+  useEffect(() => {
+    if (!wanted) return;
+    const row = rows.find((r) => r.slug === wanted);
+    if (row) setDeleting(row);
+  }, [wanted, rows]);
+  const openDelete = (row: AppRow) => {
+    openedHere.current = true;
+    setDeleting(row);
+    // Native pushState: Next.js updates useSearchParams without refetching the page.
+    window.history.pushState(null, "", `${pathname}?delete=${encodeURIComponent(row.slug)}`);
+  };
+  const requestClose = useCallback(() => {
+    if (openedHere.current) window.history.back();
+    else window.history.replaceState(null, "", pathname);
+    openedHere.current = false;
+  }, [pathname]);
   const toast = useToast();
   const polls = useRef(0);
 
@@ -64,11 +86,15 @@ export function AppListClient({ initialRows, now }: { initialRows: AppRow[]; now
   const onDeleted = useCallback(
     (row: AppRow, backup: string) => {
       setRows((all) => all.filter((r) => r.slug !== row.slug));
+      openedHere.current = false;
+      window.history.replaceState(null, "", pathname);
       toast.show(`${row.name} is deleted. Backup: ${backup}`, 6000);
       router.refresh();
     },
-    [router, toast],
+    [router, toast, pathname],
   );
+
+  const closeSheet = useCallback(() => setDeleting(null), []);
 
   if (rows.length === 0) {
     return (
@@ -175,7 +201,7 @@ export function AppListClient({ initialRows, now }: { initialRows: AppRow[]; now
                     {mine ? "Pausing…" : "Pause"}
                   </button>
                 )}
-                <button type="button" className="db-btn db-btn-sm db-btn-ghost-danger" disabled={!!busy} onClick={() => setDeleting(row)}>
+                <button type="button" className="db-btn db-btn-sm db-btn-ghost-danger" disabled={!!busy} onClick={() => openDelete(row)}>
                   Delete
                 </button>
               </div>
@@ -183,7 +209,16 @@ export function AppListClient({ initialRows, now }: { initialRows: AppRow[]; now
           );
         })}
       </ul>
-      {deleting ? <DeleteSheet row={deleting} onClose={() => setDeleting(null)} onDeleted={onDeleted} /> : null}
+      {deleting ? (
+        <DeleteSheet
+          key={deleting.slug}
+          row={deleting}
+          visible={wanted === deleting.slug}
+          onRequestClose={requestClose}
+          onClosed={closeSheet}
+          onDeleted={onDeleted}
+        />
+      ) : null}
       <Toast state={toast} />
     </>
   );
