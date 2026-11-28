@@ -61,7 +61,34 @@ function FooterLink({ appearance, text, href, label }: { appearance?: Appearance
   );
 }
 
-export function PasswordSignInForm({ appearance, providers, initial }: Shared & { initial?: FormState }) {
+function SignInIntro({ appearance, hasFlash, children }: {
+  appearance?: Appearance;
+  hasFlash?: boolean;
+  children: React.ReactNode;
+}) {
+  const [flash, setFlash] = useState<string | null>();
+  const requested = useRef(false);
+  useEffect(() => {
+    if (!hasFlash || requested.current) return;
+    requested.current = true;
+    // The browser applies Set-Cookie before fetch resolves. A reload after
+    // the notice becomes visible therefore can't render the same notice again.
+    void fetch("/api/runport/flash", { method: "POST" })
+      .then(async (response) => {
+        const result = response.ok ? await response.json() : null;
+        setFlash(result?.notice ?? null);
+      })
+      .catch(() => setFlash(null));
+  }, [hasFlash]);
+  if (flash) return <Message appearance={appearance} notice={flash} />;
+  if (hasFlash && flash === undefined) return null;
+  return <p className={resolveAppearance(appearance).cls("subtitle")}>{children}</p>;
+}
+
+export function PasswordSignInForm({ appearance, providers, initial, hasFlash }: Shared & {
+  initial?: FormState;
+  hasFlash?: boolean;
+}) {
   const [state, action] = useActionState(signIn, initial ?? {});
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -72,7 +99,7 @@ export function PasswordSignInForm({ appearance, providers, initial }: Shared & 
     <AuthCard
       appearance={appearance}
       title={`Sign in to ${appName}`}
-      subtitle="Welcome back. Sign in to continue."
+      intro={<SignInIntro appearance={appearance} hasFlash={hasFlash}>Welcome back. Sign in to continue.</SignInIntro>}
       footer={<FooterLink appearance={appearance} text="No account yet?" href="/signup" label="Sign up" />}
     >
       <WithSocial appearance={appearance} providers={providers}>
@@ -127,7 +154,10 @@ export function PasswordSignUpForm({ appearance, providers }: Shared) {
 
 const RESEND_AFTER = 30;
 
-export function CodeSignInForm({ appearance, providers, initial }: Shared & { initial: CodeState }) {
+export function CodeSignInForm({ appearance, providers, initial, hasFlash }: Shared & {
+  initial: CodeState;
+  hasFlash?: boolean;
+}) {
   const [state, action] = useActionState(emailCode, initial);
   const [email, setEmail] = useState(initial.email ?? "");
   const [code, setCode] = useState("");
@@ -156,7 +186,8 @@ export function CodeSignInForm({ appearance, providers, initial }: Shared & { in
 
   if (state.step === "email") {
     return (
-      <AuthCard appearance={appearance} title={`Sign in to ${appName}`} subtitle="Enter your email and we'll send you a code.">
+      <AuthCard appearance={appearance} title={`Sign in to ${appName}`}
+        intro={<SignInIntro appearance={appearance} hasFlash={hasFlash}>Enter your email and we'll send you a code.</SignInIntro>}>
         <WithSocial appearance={appearance} providers={providers}>
           <form key="email" action={action} className={cls("form")}>
             <Field appearance={appearance} label="Email address" name="email" type="email" required autoComplete="email"
@@ -175,7 +206,9 @@ export function CodeSignInForm({ appearance, providers, initial }: Shared & { in
     <AuthCard
       appearance={appearance}
       title="Check your email"
-      subtitle={<>Enter the 6-digit code we sent to <strong>{state.email}</strong>.</>}
+      intro={<SignInIntro appearance={appearance} hasFlash={hasFlash}>
+        Enter the 6-digit code we sent to <strong>{state.email}</strong>.
+      </SignInIntro>}
     >
       {/* The first submit button is the one Enter presses, so "Continue" comes first. */}
       <form key="code" ref={formRef} action={action} className={cls("form")}>

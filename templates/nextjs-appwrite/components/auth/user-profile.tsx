@@ -58,6 +58,13 @@ function Section({ appearance, title, description, children, danger }: {
   );
 }
 
+function AccountMessage({ appearance, error, notice, signedOut }: AccountState & { appearance?: Appearance }) {
+  const { cls } = resolveAppearance(appearance);
+  return <Message appearance={appearance} notice={notice} error={signedOut ? (
+    <>You are signed out. <Link href="/login" className={cls("link")}>Sign in</Link> again.</>
+  ) : error} />;
+}
+
 function NameForm({ appearance, name }: { appearance?: Appearance; name: string }) {
   const [state, action] = useActionState<AccountState, FormData>(updateName, {});
   const [value, setValue] = useState(name);
@@ -72,7 +79,7 @@ function NameForm({ appearance, name }: { appearance?: Appearance; name: string 
     <form action={action} className={cls("form")}>
       <Field appearance={appearance} label="Name" name="name" autoComplete="name" maxLength={128}
         value={value} onChange={(e) => setValue(e.target.value)} />
-      <Message appearance={appearance} error={state.error} notice={changed ? undefined : state.notice} />
+      <AccountMessage appearance={appearance} {...state} notice={changed ? undefined : state.notice} />
       <div className="rp-section-actions">
         <SubmitButton appearance={appearance} ready={changed && value.trim().length > 0}>Save</SubmitButton>
       </div>
@@ -111,7 +118,7 @@ function PasswordForm({ appearance, email }: { appearance?: Appearance; email: s
       <PasswordField appearance={appearance} label="New password" name="password" required minLength={8} autoComplete="new-password"
         value={next} onChange={(e) => setNext(e.target.value)}
         aside={<span className="rp-hint">At least 8 characters</span>} />
-      <Message appearance={appearance} error={state.error} notice={state.notice} />
+      <AccountMessage appearance={appearance} {...state} />
       <div className="rp-section-actions">
         <SubmitButton appearance={appearance} ready={current.length > 0 && next.length >= 8}>Change password</SubmitButton>
       </div>
@@ -179,7 +186,7 @@ function Devices({ appearance, devices }: { appearance?: Appearance; devices: De
         ))}
       </ul>
       <div ref={statusRef} tabIndex={-1} className="rp-status">
-        <Message appearance={appearance} error={message.error} notice={message.notice} />
+        <AccountMessage appearance={appearance} {...message} />
       </div>
       {others.length > 1 && (
         <div className="rp-section-actions">
@@ -225,12 +232,12 @@ function DeleteAccountForm({ appearance, email, onCancel }: { appearance?: Appea
   const { cls } = resolveAppearance(appearance);
   return (
     <form action={action} className={cls("form")}>
-      <Field appearance={appearance} label={`Type ${email} to confirm`} name="confirm" autoComplete="off" autoFocus
+      <Field appearance={appearance} label="Type your email to confirm" placeholder={email} name="confirm" autoComplete="off" autoFocus
         autoCapitalize="none" spellCheck={false} value={confirm} readOnly={pending} onChange={(e) => setConfirm(e.target.value)} />
-      <Message appearance={appearance} error={state.error} />
+      <AccountMessage appearance={appearance} {...state} />
       <div className="rp-section-actions">
         <button type="button" className={cls("link")} disabled={pending} onClick={onCancel}>Cancel</button>
-        <SubmitButton appearance={appearance} className="rp-danger-solid"
+        <SubmitButton appearance={appearance} className="rp-danger-solid" pendingLabel="Deleting…"
           ready={confirm.trim().toLowerCase() === email.toLowerCase()}>
           Delete my account
         </SubmitButton>
@@ -265,7 +272,7 @@ export function UserProfileView({ appearance, name, email, passwordMode, devices
         </Section>
 
         <Section appearance={appearance} title="Delete account" danger
-          description="Removes your account and the data that belongs only to you in this app. This cannot be undone.">
+          description="Removes your account and the data that belongs only to you in this app. This cannot be undone. Things you shared with others stay with them.">
           <DeleteAccount appearance={appearance} email={email} />
         </Section>
       </div>

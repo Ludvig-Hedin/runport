@@ -393,7 +393,7 @@
   .rp-section[data-danger] .rp-section-title { color: var(--rp-danger); }
   .rp-danger-button { color: var(--rp-danger); }
   /* A fixed deep red: white text on it passes 4.5:1 in both themes. */
-  .rp-primaryButton.rp-danger-solid:not(:disabled) { background: #b42318; color: #fff; }
+  .rp-primaryButton.rp-danger-solid:is(:not(:disabled), [aria-busy="true"]) { background: #b42318; color: #fff; }
 
   .rp-devices { display: flex; flex-direction: column; margin: 0; padding: 0; list-style: none; }
   .rp-device { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 12px 0; border-top: 1px solid var(--rp-border); }

@@ -21,16 +21,21 @@ export type { Appearance } from "./appearance";
 type WithAppearance = { appearance?: Appearance };
 
 /** The sign-in screen. Email code or password, per AUTH_MODE, plus any social buttons. */
-export async function SignIn({ appearance, error, notice }: WithAppearance & { error?: string; notice?: string }) {
+export async function SignIn({ appearance, error, notice, hasFlash }: WithAppearance & {
+  error?: string;
+  notice?: string;
+  hasFlash?: boolean;
+}) {
   const providers = oauthProviders();
   if (authMode() === "password") {
-    return <PasswordSignInForm appearance={appearance} providers={providers} initial={{ error, notice }} />;
+    return <PasswordSignInForm appearance={appearance} providers={providers} initial={{ error, notice }} hasFlash={hasFlash} />;
   }
   const pending = await readPendingLogin();
   return (
     <CodeSignInForm
       appearance={appearance}
       providers={providers}
+      hasFlash={hasFlash}
       initial={pending ? { step: "code", email: pending.email, error, notice } : { step: "email", error, notice }}
     />
   );

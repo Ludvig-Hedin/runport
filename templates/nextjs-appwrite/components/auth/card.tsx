@@ -8,11 +8,12 @@ type CardProps = {
   appearance?: Appearance;
   title: string;
   subtitle?: React.ReactNode;
+  intro?: React.ReactNode;
   footer?: React.ReactNode;
   children: React.ReactNode;
 };
 
-export function AuthCard({ appearance, title, subtitle, footer, children }: CardProps) {
+export function AuthCard({ appearance, title, subtitle, intro, footer, children }: CardProps) {
   const { style, layout, cls } = resolveAppearance(appearance);
   return (
     <main className={cls("root", "rp-page")} style={style}>
@@ -23,6 +24,7 @@ export function AuthCard({ appearance, title, subtitle, footer, children }: Card
           </div>
           <h1 className={cls("title")}>{title}</h1>
           {subtitle && <p className={cls("subtitle")}>{subtitle}</p>}
+          {intro}
         </header>
         <div className="rp-body">{children}</div>
         {footer && <p className={cls("footer")}>{footer}</p>}
@@ -31,7 +33,7 @@ export function AuthCard({ appearance, title, subtitle, footer, children }: Card
   );
 }
 
-export function Message({ appearance, error, notice }: { appearance?: Appearance; error?: string; notice?: string }) {
+export function Message({ appearance, error, notice }: { appearance?: Appearance; error?: React.ReactNode; notice?: string }) {
   const { cls } = resolveAppearance(appearance);
   if (error) return <p role="alert" className={cls("alert")}>{error}</p>;
   if (notice) return <p role="status" tabIndex={-1} className={cls("notice")}>{notice}</p>;

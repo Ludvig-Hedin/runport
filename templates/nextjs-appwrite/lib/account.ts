@@ -16,9 +16,9 @@ import { getUser } from "./session";
 // What a signed-in person can do on their own account page. Every action acts
 // as that person through their session, so Appwrite's own rules apply.
 
-export type AccountState = { error?: string; notice?: string; name?: string };
+export type AccountState = { error?: string; notice?: string; name?: string; signedOut?: boolean };
 
-const SIGNED_OUT: AccountState = { error: "You are signed out. Sign in again." };
+const SIGNED_OUT: AccountState = { error: "You are signed out. Sign in again.", signedOut: true };
 
 async function guard(): Promise<{ email: string } | AccountState> {
   const user = await getUser();
