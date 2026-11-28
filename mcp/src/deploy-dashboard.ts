@@ -1,170 +1,148 @@
 // Puts Runport's own dashboard (the repo's dashboard/ folder) online at
-// dash.runport.app, in its own Railway project "runport-dashboard", so it
-// never touches the runport project's config. Safe to rerun.
-// Run: PLATFORM_KEYCHAIN_SERVICE=runport-prod PLATFORM_APPWRITE_ENDPOINT=https://admin.runport.app/v1 bun src/deploy-dashboard.ts
+// dash.runport.app, in its own Railway project, so it never touches the
+// runport project's config. Safe to rerun.
+// Run: PLATFORM_KEYCHAIN_SERVICE=runport-prod PLATFORM_APPWRITE_ENDPOINT=https://admin.runport.app/v1 bun src/deploy-dashboard.ts [--keys=all|none|slug,slug]
 //
-// Secrets come from Keychain runport-prod and go to Railway through its API,
-// never through command-line arguments or logs.
-import { homedir } from "node:os";
-import { join, resolve } from "node:path";
-import { AppwriteAdmin, AppwriteError } from "./appwrite-admin";
+// Every target is pinned in dashboard/runport.deploy.json and checked against
+// Railway and Appwrite before anything changes. Secrets come from Keychain
+// runport-prod and go to Railway through its API, never through arguments or
+// logs; errors say only which step failed and the status code.
+import { resolve } from "node:path";
+import { AppwriteAdmin } from "./appwrite-admin";
 import { config } from "./config";
-import { readSecret } from "./keychain";
+import { readSecret, writeSecret } from "./keychain";
+import { loginSmtp } from "./login-smtp";
+import { railwayApi } from "./railway-api";
+import { type KeyPair, syncDashboard } from "./sync-dashboard";
 
-const PROJECT = "runport-dashboard";
-const SLUG = "dashboard";
-const DOMAIN = "dash.runport.app";
-const PORT = "3000";
 const folder = resolve(import.meta.dir, "..", "..", "dashboard");
-
-async function railway(args: string[]): Promise<string> {
-  const proc = Bun.spawn(["railway", ...args], { cwd: folder, stdout: "pipe", stderr: "pipe" });
-  const [out, err, code] = await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text(), proc.exited]);
-  if (code !== 0) throw new Error(`railway ${args[0]} failed: ${(err || out).trim()}`);
-  return out;
+type DeployPins = { workspaceId: string; projectId: string; projectName: string; environmentId: string; serviceId: string; appwriteProjectId: string; appwriteProjectName: string; domain: string; port: string };
+const pins = (await Bun.file(resolve(folder, "runport.deploy.json")).json()) as DeployPins;
+for (const k of ["workspaceId", "projectId", "projectName", "environmentId", "serviceId", "appwriteProjectId", "appwriteProjectName", "domain", "port"] as const) {
+  if (!pins[k]) throw new Error(`dashboard/runport.deploy.json is missing ${k}. Nothing was changed.`);
 }
-
-const login = JSON.parse(await Bun.file(join(homedir(), ".railway", "config.json")).text()) as { user?: { accessToken?: string } };
-const accountToken = login.user?.accessToken;
-if (!accountToken) throw new Error("Log in to Railway first (railway login).");
-
-async function gql<T>(query: string, variables: Record<string, unknown>, token = accountToken!): Promise<T> {
-  const res = await fetch("https://backboard.railway.com/graphql/v2", {
-    method: "POST",
-    headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
-    body: JSON.stringify({ query, variables }),
-  });
-  const body = (await res.json()) as { data?: T; errors?: { message: string }[] };
-  if (!res.ok || body.errors || !body.data) throw new Error(`Railway: ${body.errors?.map((e) => e.message).join("; ") ?? res.status}`);
-  return body.data;
-}
+const keysArg = process.argv.find((a) => a.startsWith("--keys="))?.slice("--keys=".length) ?? "all";
+const mintKeysFor = keysArg === "all" ? ("all" as const) : new Set(keysArg === "none" ? [] : keysArg.split(","));
 
 async function keychain(account: string): Promise<string | null> {
-  const proc = Bun.spawn(["security", "find-generic-password", "-s", "runport-prod", "-a", account, "-w"], { stdout: "pipe", stderr: "ignore" });
-  const out = (await new Response(proc.stdout).text()).trim();
-  return (await proc.exited) === 0 && out ? out : null;
+  return readSecret(account, "runport-prod").catch(() => null);
 }
 
-async function storeKeychain(account: string, value: string): Promise<void> {
-  // -U updates an existing item. `security` only takes the value as an
-  // argument; it is a short-lived local process, never logged.
-  const proc = Bun.spawn(["security", "add-generic-password", "-U", "-s", "runport-prod", "-a", account, "-w", value], { stdout: "ignore", stderr: "pipe" });
-  if ((await proc.exited) !== 0) throw new Error(`Could not store ${account} in the Keychain.`);
-}
-
-// 0. The DNS token must exist before anything registers the domain.
+// 0. Check every pinned Railway id before changing anything.
+type Check = { project: { id: string; name: string; workspaceId: string; environments: { edges: { node: { id: string; name: string } }[] }; services: { edges: { node: { id: string; name: string } }[] } } | null };
+const check = await railwayApi<Check>(
+  "query($p: String!) { project(id: $p) { id name workspaceId environments { edges { node { id name } } } services { edges { node { id name } } } } }",
+  { p: pins.projectId },
+);
+const p = check.project;
+if (!p || p.name !== pins.projectName || p.workspaceId !== pins.workspaceId) throw new Error("The pinned Railway project does not match. Nothing was changed.");
+if (!p.environments.edges.some((e) => e.node.id === pins.environmentId && e.node.name === "production")) throw new Error("The pinned environment does not match. Nothing was changed.");
+if (!p.services.edges.some((s) => s.node.id === pins.serviceId && s.node.name === "web")) throw new Error("The pinned service does not match. Nothing was changed.");
 if (!(await keychain("cloudflare-dns-token"))) throw new Error("No Cloudflare DNS token in Keychain runport-prod. Nothing was changed.");
+console.log("railway targets checked");
 
-// 1. The Railway project. A folder without its own link inherits a parent's,
-// so the linked project must be exactly runport-dashboard.
-const workspaceId = (await gql<{ me: { workspaces: { id: string }[] } }>("{ me { workspaces { id } } }", {})).me.workspaces[0]?.id;
-if (!workspaceId) throw new Error("No Railway workspace.");
-const linked = await railway(["status", "--json"]).then((out) => JSON.parse(out) as { name: string }, () => null);
-if (linked && linked.name !== PROJECT) throw new Error(`dashboard/ is linked to "${linked.name}", not "${PROJECT}". Nothing was changed.`);
-if (!linked) {
-  const projects = await gql<{ workspace: { projects: { edges: { node: { id: string; name: string } }[] } } }>(
-    "query($w: String!) { workspace(workspaceId: $w) { projects { edges { node { id name } } } } }",
-    { w: workspaceId },
-  );
-  const existing = projects.workspace.projects.edges.find((e) => e.node.name === PROJECT);
-  if (existing) await railway(["link", "--project", existing.node.id, "--environment", "production"]);
-  else await railway(["init", "--name", PROJECT, "--json"]);
-}
-type Status = { id: string; environments: { edges: { node: { id: string; name: string } }[] }; services: { edges: { node: { id: string; name: string } }[] } };
-let status = JSON.parse(await railway(["status", "--json"])) as Status;
-if (!status.services.edges.some((s) => s.node.name === "web")) {
-  await railway(["add", "--service", "web"]);
-  status = JSON.parse(await railway(["status", "--json"])) as Status;
-}
-const projectId = status.id;
-const environmentId = status.environments.edges.find((e) => e.node.name === "production")!.node.id;
-const serviceId = status.services.edges.find((s) => s.node.name === "web")!.node.id;
-await gql("mutation($s: String!, $e: String!) { serviceInstanceUpdate(serviceId: $s, environmentId: $e, input: { sleepApplication: true }) }", { s: serviceId, e: environmentId });
-const domainOut = JSON.parse(await railway(["domain", "--service", "web", "--json"])) as { domain?: string; domains?: string[] };
-const railwayDomain = new URL(domainOut.domain ?? domainOut.domains?.find((d) => d.includes(".up.railway.app")) ?? "").host;
-console.log(`railway project ${PROJECT} ready`);
-
-// 2. The dashboard's own Appwrite project: sign-in, its tables and the backup bucket.
+// 1. The dashboard's Appwrite project. "dashboard" is a reserved slug, and an
+// existing project must be ours (its name and its server key) before any
+// setting on it changes.
 const admin = new AppwriteAdmin();
-if (!(await admin.getProject(SLUG))) await admin.createProject(SLUG, "Runport dashboard");
-for (const host of [DOMAIN, railwayDomain, "localhost"]) {
-  await admin.addWebPlatform(SLUG, host).catch((e) => {
-    if (!(e instanceof AppwriteError && e.status === 409)) throw e;
-  });
+const existing = await admin.getProject(pins.appwriteProjectId);
+let appwriteKey = await keychain("dashboard-appwrite-key");
+if (existing) {
+  if (existing.name !== pins.appwriteProjectName || !appwriteKey) throw new Error("An Appwrite project called dashboard exists but is not the dashboard's. Nothing was changed.");
+  // Our key must open the project and find the dashboard's own deletions table.
+  const own = await fetch(`${config.endpoint}/tablesdb/main/tables/deletions`, { headers: { "X-Appwrite-Project": pins.appwriteProjectId, "X-Appwrite-Key": appwriteKey } });
+  if (!own.ok) throw new Error("The dashboard's stored Appwrite key does not open the dashboard project. Nothing was changed.");
+} else {
+  await admin.createProject(pins.appwriteProjectId, pins.appwriteProjectName);
+  appwriteKey = (await admin.createServerKey(pins.appwriteProjectId, "dashboard-online")).secret;
+  await writeSecret("dashboard-appwrite-key", appwriteKey, "runport-prod");
 }
-const masterKey = await readSecret("mail-gateway-master-key");
-await admin.setProjectSmtp(SLUG, {
-  senderName: "Runport",
-  senderEmail: `${SLUG}@${config.mailDomain}`,
-  host: "mail-gateway.railway.internal",
-  port: 2525,
-  username: SLUG,
-  password: new Bun.CryptoHasher("sha256", masterKey).update(`mail-gateway:${SLUG}`).digest("hex"),
-});
-// Only email codes may sign in: no passwords, links, phone or anonymous
-// accounts, so nobody can make an account for the owner's address another way.
+for (const host of [pins.domain, "localhost"]) await admin.addWebPlatform(pins.appwriteProjectId, host).catch(() => {});
+// Login codes go through the gateway's dedicated login identity.
+await admin.setProjectSmtp(pins.appwriteProjectId, loginSmtp(pins.appwriteProjectId, "Runport", await readSecret("mail-master-key", "runport-prod"), config.mailDomain));
+console.log("appwrite project ready");
+
+// 2. Only email codes may sign in.
 {
-  const session = await fetch(`${config.endpoint}/account/sessions/email`, {
+  const res = await fetch(`${config.endpoint}/account/sessions/email`, {
     method: "POST",
     headers: { "Content-Type": "application/json", "X-Appwrite-Project": "console" },
-    body: JSON.stringify({ email: await readSecret("appwrite-owner-email"), password: await readSecret("appwrite-owner-password") }),
+    body: JSON.stringify({ email: await readSecret("appwrite-owner-email", "runport-prod"), password: await readSecret("appwrite-owner-password", "runport-prod") }),
   });
-  if (!session.ok) throw new Error(`Appwrite console sign-in failed (HTTP ${session.status}).`);
-  const cookie = session.headers.getSetCookie().map((c) => c.split(";")[0]).join("; ");
+  if (!res.ok) throw new Error(`Appwrite console sign-in failed (${res.status}).`);
+  const cookie = res.headers.getSetCookie().map((c) => c.split(";")[0]).join("; ");
   for (const method of ["email-password", "magic-url", "anonymous", "invites", "phone"]) {
-    const res = await fetch(`${config.endpoint}/projects/${SLUG}/auth/${method}`, {
+    const r = await fetch(`${config.endpoint}/projects/${pins.appwriteProjectId}/auth/${method}`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json", "X-Appwrite-Project": "console", Cookie: cookie },
       body: JSON.stringify({ enabled: false }),
     });
-    if (!res.ok) throw new Error(`Could not turn off ${method} sign-in (HTTP ${res.status}).`);
+    if (!r.ok) throw new Error(`Could not turn off ${method} sign-in (${r.status}).`);
   }
   await fetch(`${config.endpoint}/account/sessions/current`, { method: "DELETE", headers: { "X-Appwrite-Project": "console", Cookie: cookie } });
 }
-let appwriteKey = await keychain("dashboard-appwrite-key");
-if (!appwriteKey) {
-  appwriteKey = (await admin.createServerKey(SLUG, "dashboard-online")).secret;
-  await storeKeychain("dashboard-appwrite-key", appwriteKey);
-}
-console.log("appwrite project ready");
 
-// 3. The dashboard's Railway workspace token. Railway only lets a person make
-// one (Account settings > Tokens, workspace "ludvig-hedin's Projects"); store
-// it once with: security add-generic-password -s runport-prod -a dashboard-railway-token -w
-// Without it the dashboard runs, and its Railway blocks say they can't load.
+// 3. Tables and the backup bucket.
+const env = { ...process.env, APPWRITE_ENDPOINT: config.endpoint, APPWRITE_PROJECT_ID: pins.appwriteProjectId, APPWRITE_API_KEY: appwriteKey };
+const setup = Bun.spawn(["bun", "run", "setup"], { cwd: folder, env, stdout: "ignore", stderr: "ignore" });
+if ((await setup.exited) !== 0) throw new Error("Dashboard table setup failed.");
+
+// 4. The trusted app list and per-app keys.
+type Vars = { variables: Record<string, string> };
+const current = (await railwayApi<Vars>(
+  "query($p: String!, $e: String!, $s: String!) { variables(projectId: $p, environmentId: $e, serviceId: $s) }",
+  { p: pins.projectId, e: pins.environmentId, s: pins.serviceId },
+)).variables;
+let existingKeys: Record<string, KeyPair> = {};
+try {
+  existingKeys = JSON.parse(current.RUNPORT_APP_KEYS ?? "{}");
+} catch {
+  existingKeys = {};
+}
+const sync = await syncDashboard({ workspaceId: pins.workspaceId, mintKeysFor, existingKeys, extraRegistry: process.env.DASHBOARD_EXTRA_REGISTRY }, appwriteKey);
+console.log(`apps pinned: ${sync.synced.join(", ") || "none"}${sync.withoutKeys.length ? ` (no keys yet: ${sync.withoutKeys.join(", ")})` : ""}`);
+
+// 5. Settings through the API, then remove settings older versions used.
 const railwayToken = await keychain("dashboard-railway-token");
 if (!railwayToken) console.warn("No dashboard-railway-token in the Keychain: cost, status and actions stay off.");
-
-// 4. Tables and bucket, then the Mac's app list.
-const env = { ...process.env, APPWRITE_ENDPOINT: config.endpoint, APPWRITE_PROJECT_ID: SLUG, APPWRITE_API_KEY: appwriteKey };
-for (const script of ["setup", "sync-apps"]) {
-  const proc = Bun.spawn(["bun", "run", script], { cwd: folder, env, stdout: "inherit", stderr: "pipe" });
-  if ((await proc.exited) !== 0) throw new Error(`${script} failed: ${await new Response(proc.stderr).text()}`);
-}
-
-// 5. Settings, through the API so no secret lands in a process list.
-const owner = await readSecret("owner-email");
 const variables: Record<string, string> = {
   APPWRITE_ENDPOINT: config.endpoint,
-  APPWRITE_PROJECT_ID: SLUG,
+  APPWRITE_PROJECT_ID: pins.appwriteProjectId,
   APPWRITE_API_KEY: appwriteKey,
-  APP_URL: `https://${DOMAIN}`,
-  PORT,
+  APP_URL: `https://${pins.domain}`,
+  PORT: pins.port,
   NEXT_TELEMETRY_DISABLED: "1",
-  DASHBOARD_OWNER_EMAILS: owner,
-  ...(railwayToken ? { RAILWAY_API_TOKEN: railwayToken } : {}),
-  RAILWAY_WORKSPACE_ID: workspaceId,
+  DASHBOARD_OWNER_EMAILS: await readSecret("owner-email", "runport-prod"),
+  RAILWAY_WORKSPACE_ID: pins.workspaceId,
   ANALYTICS_URL: "https://analytics.runport.app",
-  ANALYTICS_ADMIN_PASSWORD: await readSecret("analytics-admin-password"),
-  APPWRITE_CONSOLE_EMAIL: await readSecret("appwrite-owner-email"),
-  APPWRITE_CONSOLE_PASSWORD: await readSecret("appwrite-owner-password"),
+  ANALYTICS_USERNAME: "runport-dashboard",
+  ANALYTICS_PASSWORD: await readSecret("analytics-dashboard-password", "runport-prod"),
+  RUNPORT_APP_KEYS: JSON.stringify(sync.keys),
+  ...(railwayToken ? { RAILWAY_API_TOKEN: railwayToken } : {}),
 };
-await gql(
+await railwayApi(
   "mutation($i: VariableCollectionUpsertInput!) { variableCollectionUpsert(input: $i) }",
-  { i: { projectId, environmentId, serviceId, variables, skipDeploys: true } },
+  { i: { projectId: pins.projectId, environmentId: pins.environmentId, serviceId: pins.serviceId, variables, skipDeploys: true } },
+);
+for (const name of ["APPWRITE_CONSOLE_EMAIL", "APPWRITE_CONSOLE_PASSWORD", "ANALYTICS_ADMIN_PASSWORD"]) {
+  if (name in current) {
+    await railwayApi("mutation($i: VariableDeleteInput!) { variableDelete(input: $i) }", {
+      i: { projectId: pins.projectId, environmentId: pins.environmentId, serviceId: pins.serviceId, name },
+    });
+  }
+}
+await railwayApi(
+  "mutation($s: String!, $e: String!) { serviceInstanceUpdate(serviceId: $s, environmentId: $e, input: { sleepApplication: true }) }",
+  { s: pins.serviceId, e: pins.environmentId },
 );
 console.log("settings saved");
 
-// 6. Deploy the folder.
-await railway(["up", folder, "--path-as-root", "--service", "web", "--detach"]);
-console.log(`deploy started. Next: bun src/custom-domain.ts ${DOMAIN} web ${PORT} ${folder}`);
+// 6. Deploy the folder to the pinned project, environment and service by id.
+if (!process.argv.includes("--no-deploy")) {
+  const up = Bun.spawn(["railway", "up", folder, "--path-as-root", "--project", pins.projectId, "--environment", pins.environmentId, "--service", pins.serviceId, "--detach"], {
+    cwd: folder, stdout: "ignore", stderr: "ignore",
+  });
+  if ((await up.exited) !== 0) throw new Error("railway up failed. Run it again; nothing else changed.");
+  console.log("deploy started");
+}
+console.log(`The address ${pins.domain} is already set up; for a new one run: bun src/custom-domain.ts ${pins.domain} web ${pins.port} ${folder} (after checking that folder's Railway link is ${pins.projectName}).`);

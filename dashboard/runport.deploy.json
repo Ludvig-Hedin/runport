@@ -1,0 +1,12 @@
+{
+  "note": "Pinned targets for mcp/src/deploy-dashboard.ts. Ids, not secrets. The script refuses to change anything that does not match.",
+  "workspaceId": "a01bd76b-2e91-4371-b858-7720034fbd4f",
+  "projectId": "5c77905d-7092-4a4c-8dd4-718d6d90c6c1",
+  "projectName": "runport-dashboard",
+  "environmentId": "9940b21b-58bc-4781-bb23-b2ad0cb16228",
+  "serviceId": "0ae3afb2-e6dd-4d9e-82fb-b6d141dad263",
+  "appwriteProjectId": "dashboard",
+  "appwriteProjectName": "Runport dashboard",
+  "domain": "dash.runport.app",
+  "port": "3000"
+}

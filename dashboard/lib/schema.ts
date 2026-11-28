@@ -47,6 +47,7 @@ export const TABLES: TableSpec[] = [
       text("state", 16),
       text("owner", 64),
       text("prevStatus", 16),
+      text("frozenServices", 512),
       text("manifestId", 64),
       text("manifestSha", 64),
       text("error", 512),

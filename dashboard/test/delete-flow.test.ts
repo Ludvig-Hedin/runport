@@ -40,8 +40,9 @@ function fakeDeps(store: DeleteStore, over: Partial<DeleteDeps> = {}, clock = { 
     preflight: step("preflight"),
     stopHosting: step("stop", "live"),
     restartHosting: async (prev) => void calls.push(`restart:${prev}`),
+    readServices: step("readServices", '["account","tablesdb"]'),
     freezeWrites: step("freeze"),
-    unfreezeWrites: step("unfreeze"),
+    unfreezeWrites: async (saved) => void calls.push(`unfreeze:${saved}`),
     backup: step("backup", BACKUP),
     verify: async (id, sha) => void calls.push(`verify:${id}:${sha}`),
     deleteData: step("deleteData"),
@@ -56,7 +57,7 @@ test("a delete stops and freezes first, saves the verified backup, then deletes"
   const { deps, calls } = fakeDeps(store);
   const steps: string[] = [];
   const record = await runDelete("rail-1", "fixture", deps, (s) => steps.push(s));
-  expect(calls).toEqual(["preflight", "stop", "freeze", "backup", "verify:m1:sha1", "deleteData", "deleteHosting"]);
+  expect(calls).toEqual(["preflight", "stop", "readServices", "freeze", "backup", "verify:m1:sha1", "deleteData", "deleteHosting"]);
   expect(steps).toEqual(["stop", "backup", "check", "data", "hosting", "done"]);
   expect(record.state).toBe("done");
   expect(store.rows.get("rail-1")).toMatchObject({ state: "done", manifestId: "m1", manifestSha: "sha1", prevStatus: "live" });
@@ -80,7 +81,8 @@ test("a failed backup deletes nothing and puts the app back", async () => {
   await expect(runDelete("rail-1", "fixture", deps, () => {})).rejects.toThrow("disk full");
   expect(calls).not.toContain("deleteData");
   expect(calls).not.toContain("deleteHosting");
-  expect(calls).toContain("unfreeze");
+  // Only the services that were on come back on.
+  expect(calls).toContain('unfreeze:["account","tablesdb"]');
   expect(calls).toContain("restart:live");
   expect(store.rows.get("rail-1")?.state).toBe("aborted");
 });
@@ -148,7 +150,7 @@ test("a retry whose saved backup no longer checks out deletes nothing", async ()
 test("a crashed run can be taken over once it is stale, keeping the app stopped", async () => {
   const store = memoryStore();
   const clock = { t: 1_000_000 };
-  await store.create({ key: "rail-1", slug: "fixture", state: "frozen", owner: "crashed", prevStatus: "sleeping", updatedAt: clock.t });
+  await store.create({ key: "rail-1", slug: "fixture", state: "frozen", owner: "crashed", prevStatus: "sleeping", frozenServices: '["account"]', updatedAt: clock.t });
   const early = fakeDeps(store, {}, clock);
   await expect(runDelete("rail-1", "fixture", early.deps, () => {})).rejects.toBeInstanceOf(DeleteBusy);
 
@@ -156,7 +158,9 @@ test("a crashed run can be taken over once it is stale, keeping the app stopped"
   const later = fakeDeps(store, {}, clock);
   await runDelete("rail-1", "fixture", later.deps, () => {});
   // Already stopped by the crashed run: no second stop, freeze again, then the rest.
+  // The services list saved before the first freeze is kept, not re-read from the frozen project.
   expect(later.calls).toEqual(["freeze", "backup", "verify:m1:sha1", "deleteData", "deleteHosting"]);
+  expect(store.rows.get("rail-1")?.frozenServices).toBe('["account"]');
   expect(store.rows.get("rail-1")?.prevStatus).toBe("sleeping");
 });
 
@@ -167,4 +171,22 @@ test("a finished delete is not run again", async () => {
   const record = await runDelete("rail-1", "fixture", deps, () => {});
   expect(record.state).toBe("done");
   expect(calls).toEqual([]);
+});
+
+test("if reading the service settings fails, nothing is switched off and the app is restarted", async () => {
+  const store = memoryStore();
+  const { deps, calls } = fakeDeps(store, {
+    readServices: async () => { throw new Error("Appwrite did not answer"); },
+  });
+  await expect(runDelete("rail-1", "fixture", deps, () => {})).rejects.toThrow("Appwrite did not answer");
+  expect(calls.some((c) => c.startsWith("unfreeze"))).toBe(false);
+  expect(calls).toContain("restart:live");
+});
+
+test("an abort after a partial freeze switches back on only what was on", async () => {
+  const store = memoryStore();
+  const { deps, calls } = fakeDeps(store, { freezeWrites: async () => { throw new Error("half way"); } });
+  await expect(runDelete("rail-1", "fixture", deps, () => {})).rejects.toThrow("half way");
+  expect(calls).toContain('unfreeze:["account","tablesdb"]');
+  expect(calls).not.toContain("deleteData");
 });

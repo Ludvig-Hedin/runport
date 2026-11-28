@@ -59,7 +59,7 @@ export type Inventory = ReturnType<typeof countsOf> & { blocked: string | null }
 
 export async function inventory(app: RunportApp): Promise<Inventory> {
   const api = readApi(app.pins);
-  if (!api) return { users: 0, tables: 0, rows: 0, files: 0, bytes: 0, blocked: "This app has no backup key yet. Run sync-dashboard on the Mac." };
+  if (!api) return { users: 0, tables: 0, rows: 0, files: 0, bytes: 0, blocked: "Its backup access is not set up yet; the dashboard setup on your Mac does that." };
   if (app.extras.length) {
     const counts = countsOf(await snapshot(api).catch(() => ({ users: [], databases: [], buckets: [] })));
     return { ...counts, blocked: `It also has ${app.extras.join(", ")}, which the backup cannot keep.` };
@@ -87,6 +87,7 @@ function deleteStore(name: string): DeleteStore {
     ...(r.state ? { state: r.state } : {}),
     ...("owner" in r ? { owner: r.owner ?? null } : {}),
     ...("prevStatus" in r ? { prevStatus: r.prevStatus ?? null } : {}),
+    ...("frozenServices" in r ? { frozenServices: r.frozenServices ?? null } : {}),
     ...("manifestId" in r ? { manifestId: r.manifestId ?? null } : {}),
     ...("manifestSha" in r ? { manifestSha: r.manifestSha ?? null } : {}),
     ...("backupName" in r ? { backup: r.backupName || "pending" } : {}),
@@ -113,6 +114,7 @@ function deleteStore(name: string): DeleteStore {
           state: (str(r.state) ?? "done") as DeleteRecord["state"],
           owner: str(r.owner) ?? "",
           prevStatus: str(r.prevStatus),
+          frozenServices: str(r.frozenServices),
           manifestId: str(r.manifestId),
           manifestSha: str(r.manifestSha),
           backupName: str(r.backup) === "pending" ? undefined : str(r.backup),
@@ -134,16 +136,10 @@ function deleteStore(name: string): DeleteStore {
 export function deleteDeps(app: RunportApp): DeleteDeps {
   const read = readApi(app.pins);
   const write = writeApi(app.pins);
-  if (!read || !write) throw new Error("This app has no keys for a delete yet. Run sync-dashboard on the Mac.");
+  if (!read || !write) throw new Error("Its backup access is not set up yet; the dashboard setup on your Mac does that.");
   const store = backupStore();
-  const setServices = async (enabled: boolean) => {
-    for (const service of SERVICES) {
-      await write.send("PATCH", `/project/services/${service}`, { enabled }).catch((error) => {
-        // A service this Appwrite version does not have.
-        if (error instanceof AppwriteHttpError && error.status === 400) return;
-        throw error;
-      });
-    }
+  const setServices = async (ids: string[], enabled: boolean) => {
+    for (const service of ids) await write.send("PATCH", `/project/services/${service}`, { enabled });
   };
   return {
     store: deleteStore(app.pins.name),
@@ -161,8 +157,18 @@ export function deleteDeps(app: RunportApp): DeleteDeps {
     async restartHosting(prev) {
       if (prev === "live" || prev === "sleeping") await resumeApp(app);
     },
-    freezeWrites: () => setServices(false),
-    unfreezeWrites: () => setServices(true),
+    async readServices() {
+      const project = await read.get<{ services: { $id: string; enabled: boolean }[] }>("/project");
+      return JSON.stringify(project.services.filter((s) => SERVICES.includes(s.$id) && s.enabled).map((s) => s.$id));
+    },
+    async freezeWrites() {
+      const project = await read.get<{ services: { $id: string; enabled: boolean }[] }>("/project");
+      await setServices(project.services.filter((s) => SERVICES.includes(s.$id) && s.enabled).map((s) => s.$id), false);
+    },
+    async unfreezeWrites(saved) {
+      const ids = JSON.parse(saved) as string[];
+      await setServices(ids.filter((id) => SERVICES.includes(id)), true);
+    },
     backup: () => runBackup(read, store, () => ID.unique()),
     async verify(manifestId, manifestSha, expected) {
       await verifyBackup(store, manifestId, manifestSha, expected);

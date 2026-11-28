@@ -22,6 +22,8 @@ export type DeleteRecord = {
   owner: string;
   /** What the hosting was doing before the delete stopped it. */
   prevStatus?: string;
+  /** Which client services were on before the freeze, saved before any is switched off. */
+  frozenServices?: string;
   manifestId?: string;
   manifestSha?: string;
   backupName?: string;
@@ -46,8 +48,11 @@ export type DeleteDeps = {
   /** Stops the hosting and returns what it was doing ("live", "sleeping", "paused", …). */
   stopHosting(): Promise<string>;
   restartHosting(prevStatus: string): Promise<void>;
+  /** Reads which client services are on now, as an opaque saved value. */
+  readServices(): Promise<string>;
   freezeWrites(): Promise<void>;
-  unfreezeWrites(): Promise<void>;
+  /** Switches back on only the services that were on, per the saved value. */
+  unfreezeWrites(saved: string): Promise<void>;
   backup(): Promise<BackupResult>;
   verify(manifestId: string, manifestSha: string, expected?: Counts): Promise<void>;
   deleteData(): Promise<void>;
@@ -103,6 +108,7 @@ export async function runDelete(key: string, slug: string, deps: DeleteDeps, emi
       emit("stop");
       const prevStatus = record.prevStatus ?? (await deps.stopHosting());
       if (!record.prevStatus) await save({ prevStatus });
+      if (!record.frozenServices) await save({ frozenServices: await deps.readServices() });
       froze = true;
       await deps.freezeWrites();
       await save({ state: "frozen" });
@@ -115,7 +121,11 @@ export async function runDelete(key: string, slug: string, deps: DeleteDeps, emi
       const message = error instanceof Error ? error.message : "Something went wrong.";
       // Put the app back the way it was. If that fails too, say so.
       const undo: string[] = [];
-      if (froze) await deps.unfreezeWrites().catch(() => undo.push("switch writes back on"));
+      if (froze) {
+        // Unknown earlier state: leave the services off rather than guess.
+        if (!record.frozenServices) undo.push("switch changes back on (the earlier settings were not saved)");
+        else await deps.unfreezeWrites(record.frozenServices).catch(() => undo.push("switch changes back on"));
+      }
       if (record.prevStatus) await deps.restartHosting(record.prevStatus).catch(() => undo.push("restart the app"));
       await save({ state: "aborted", error: undo.length ? `${message} Could not ${undo.join(" or ")}.` : message });
       throw new Error(undo.length ? `${message} Could not ${undo.join(" or ")}; check the app.` : message);
