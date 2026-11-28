@@ -1,4 +1,5 @@
 import "server-only";
+import { InputFile } from "node-appwrite/file";
 import { Client, ID, Query, Storage, TablesDB, Users, type Models } from "node-appwrite";
 import { createAdminClient } from "@/lib/appwrite";
 import type { RunportApp } from "./railway";
@@ -16,6 +17,21 @@ function appClient(app: RunportApp) {
     .setProject(app.slug)
     .setKey(app.appwriteKey);
   return { users: new Users(client), tables: new TablesDB(client), storage: new Storage(client) };
+}
+
+/**
+ * Raw bytes of a stored file. The SDK's getFileDownload parses JSON files into
+ * objects, which would corrupt a byte-for-byte copy, so this asks directly.
+ */
+async function download(project: string, key: string, bucketId: string, fileId: string): Promise<Uint8Array> {
+  const endpoint = (process.env.APPWRITE_ENDPOINT ?? "").replace(/\/+$/, "");
+  const res = await fetch(`${endpoint}/storage/buckets/${encodeURIComponent(bucketId)}/files/${encodeURIComponent(fileId)}/download`, {
+    headers: { "X-Appwrite-Project": project, "X-Appwrite-Key": key },
+    cache: "no-store",
+    signal: AbortSignal.timeout(120_000),
+  });
+  if (!res.ok) throw new Error(`Could not read file ${fileId} (HTTP ${res.status}).`);
+  return new Uint8Array(await res.arrayBuffer());
 }
 
 /** Reads every page of a list, 100 at a time, using the last id as cursor. */
@@ -102,7 +118,6 @@ export type BackupResult = { name: string; inventory: Inventory };
  */
 export async function backupApp(app: RunportApp, onStep: (step: BackupStep) => void): Promise<BackupResult> {
   onStep("users");
-  const source = appClient(app);
   const snap = await snapshot(app);
   const expected = count(snap);
   const { storage } = dashboardStorage();
@@ -113,12 +128,12 @@ export async function backupApp(app: RunportApp, onStep: (step: BackupStep) => v
   const copies: { bucketId: string; fileId: string; backupFileId: string; size: number }[] = [];
   for (const { bucket, files } of snap.buckets) {
     for (const file of files) {
-      const bytes = await source.storage.getFileDownload({ bucketId: bucket.$id, fileId: file.$id });
+      const bytes = await download(app.slug, app.appwriteKey, bucket.$id, file.$id);
       const backupFileId = ID.unique();
       const saved = await storage.createFile({
         bucketId: BACKUP_BUCKET,
         fileId: backupFileId,
-        file: new File([bytes], `${name}__${bucket.$id}__${file.$id}__${file.name}`.slice(0, 255)),
+        file: InputFile.fromBuffer(bytes, `${name}__${bucket.$id}__${file.$id}__${file.name}`.slice(0, 255)),
       });
       if (saved.sizeOriginal !== file.sizeOriginal) throw new Error(`File ${file.name} was not copied whole.`);
       copies.push({ bucketId: bucket.$id, fileId: file.$id, backupFileId, size: saved.sizeOriginal });
@@ -128,10 +143,11 @@ export async function backupApp(app: RunportApp, onStep: (step: BackupStep) => v
   onStep("data");
   const manifest = JSON.stringify({ app: app.slug, takenAt: new Date().toISOString(), counts: expected, ...snap, fileCopies: copies });
   const manifestId = ID.unique();
-  await storage.createFile({ bucketId: BACKUP_BUCKET, fileId: manifestId, file: new File([manifest], `${name}.json`, { type: "application/json" }) });
+  await storage.createFile({ bucketId: BACKUP_BUCKET, fileId: manifestId, file: InputFile.fromPlainText(manifest, `${name}.json`) });
 
   onStep("check");
-  const readBack = JSON.parse(new TextDecoder().decode(await storage.getFileDownload({ bucketId: BACKUP_BUCKET, fileId: manifestId }))) as Snapshot & {
+  const own = { project: process.env.APPWRITE_PROJECT_ID ?? "", key: process.env.APPWRITE_API_KEY ?? "" };
+  const readBack = JSON.parse(new TextDecoder().decode(await download(own.project, own.key, BACKUP_BUCKET, manifestId))) as Snapshot & {
     fileCopies: typeof copies;
   };
   const got = count(readBack);

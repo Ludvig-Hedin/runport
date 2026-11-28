@@ -108,7 +108,7 @@ export function DeleteSheet({ row, visible, onRequestClose, onClosed, onDeleted 
           if (event.step === "error") throw Object.assign(new Error(event.error), { deleted: !!event.deleted });
           if (event.step === "done") {
             setRun({ state: "done", backup: event.backup ?? "" });
-            setTimeout(() => onDeleted(row, event.backup ?? ""), 900);
+            setTimeout(() => onDeleted(row, event.backup ?? ""), 1800);
             return;
           }
           step = event.step;
@@ -239,7 +239,7 @@ export function DeleteSheet({ row, visible, onRequestClose, onClosed, onDeleted 
             <p className="db-row-error" role="alert">
               {run.deleted
                 ? `It stopped partway: ${run.error} The backup is saved. Try again to finish.`
-                : `Nothing was deleted. ${run.error}`}
+                : `Nothing was deleted, because the backup did not work. ${run.error}`}
             </p>
           ) : null}
           {run.state === "done" ? <p className="db-done">Deleted. The backup is saved as {run.backup}.</p> : null}
