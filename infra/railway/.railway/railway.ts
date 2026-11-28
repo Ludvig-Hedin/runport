@@ -32,12 +32,6 @@ const baseEnv = (): Record<string, string> =>
 
 export default defineRailway(() => {
   const domain = secret("SD_PUBLIC_DOMAIN");
-  const appAlertMonitorToken = process.env.SD_APP_ALERT_RAILWAY_TOKEN;
-  const appAlertMonitorEnv: Record<string, string> = {};
-  if (appAlertMonitorToken) {
-    appAlertMonitorEnv.RAILWAY_MONITOR_TOKEN = appAlertMonitorToken;
-    appAlertMonitorEnv.RUNPORT_ALERT_MONITOR_KEY = secret("SD_APP_ALERT_MONITOR_KEY");
-  }
   const files = bucket("appwrite-files", { region: "ams" });
 
   const appwriteEnv = {
@@ -126,7 +120,7 @@ export default defineRailway(() => {
       MAIL_APP_NEWS_DAILY_LIMIT: "500",
       MAIL_NEWS_SHARE_PERCENT: "70",
       SENDER_DOMAINS: "runport.app,apps.ludvighedin.com",
-      ...(appAlertMonitorToken ? { ALERT_TO: OWNER_ALERT_ADDRESS } : {}),
+      ALERT_TO: OWNER_ALERT_ADDRESS,
     },
   });
 
@@ -196,7 +190,7 @@ export default defineRailway(() => {
     replicas: REGION,
     start: "bun monitor.ts",
     deploy: { cronSchedule: "*/5 * * * *", restartPolicyType: "NEVER" },
-    env: { ...opsEnv, ...appAlertMonitorEnv, ALERT_EVERY_HOURS: "3", ANALYTICS_HEALTH_URL: "https://analytics.runport.app/runport/ingest", GIT_HEALTH_URL: "https://git.runport.app/api/healthz" },
+    env: { ...opsEnv, RUNPORT_ALERT_MONITOR_KEY: secret("SD_APP_ALERT_MONITOR_KEY"), ALERT_EVERY_HOURS: "3", ANALYTICS_HEALTH_URL: "https://analytics.runport.app/runport/ingest", GIT_HEALTH_URL: "https://git.runport.app/api/healthz" },
   });
 
   return project("runport", {

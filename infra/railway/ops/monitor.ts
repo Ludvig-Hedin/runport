@@ -1,4 +1,4 @@
-import { checkDeployedApps } from "./app-alert-monitor";
+import { processAppAlerts } from "./app-alert-monitor";
 import { analyticsOwnerAlert, updateIncident, type MonitorState } from "./monitor-alerts";
 import { maintainAccounts } from "./account-maintenance";
 
@@ -70,8 +70,8 @@ async function checkPlatform() {
 }
 
 const jobs = [{ name: "platform monitor", run: checkPlatform() }];
-if (process.env.RUNPORT_ALERT_MONITOR_KEY && process.env.RAILWAY_MONITOR_TOKEN) {
-  jobs.push({ name: "app alerts", run: checkDeployedApps() });
+if (process.env.RUNPORT_ALERT_MONITOR_KEY) {
+  jobs.push({ name: "app alerts", run: processAppAlerts() });
 }
 
 if (process.env.RUNPORT_ALERT_MONITOR_KEY) {

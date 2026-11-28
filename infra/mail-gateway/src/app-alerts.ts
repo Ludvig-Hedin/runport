@@ -2,6 +2,7 @@ import { Database } from "bun:sqlite";
 import { createHmac, timingSafeEqual } from "node:crypto";
 import { DeliveryError, type Deliver } from "./deliver";
 import { stockholmDay, type Limits } from "./limits";
+import { probeRailwayApp, railwayWebhooks } from "./railway-webhook";
 
 const APP = /^[a-z][a-z0-9-]{1,35}$/;
 const UUID = /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/;
@@ -46,6 +47,7 @@ type Alert = {
 type Options = {
   path: string; master: string; owner?: string; limits: Limits; deliver: Deliver;
   log: (entry: Record<string, unknown>) => void; clock?: () => number;
+  probe?: (domain: string) => Promise<boolean>;
 };
 
 const status = (code: number) => new Response(null, { status: code });
@@ -57,7 +59,9 @@ function authenticated(request: Request, expected: string): boolean {
 
 async function boundedJson(request: Request, maxBytes: number): Promise<unknown> {
   const reader = request.body?.getReader();
-  if (!reader || request.headers.get("content-type") !== "application/json") throw new Error("JSON required");
+  if (!reader || request.headers.get("content-type")?.split(";", 1)[0].trim().toLowerCase() !== "application/json") {
+    throw new Error("JSON required");
+  }
   const bytes = new Uint8Array(maxBytes);
   let size = 0;
   while (true) {
@@ -106,7 +110,7 @@ function observation(value: unknown): value is Observation {
     typeof value.reason === "string" && (value.status !== "down" || Object.hasOwn(downReasons, value.reason));
 }
 
-export function createAppAlerts({ path, master, owner, limits, deliver, log, clock = Date.now }: Options) {
+export function createAppAlerts({ path, master, owner, limits, deliver, log, clock = Date.now, probe = probeRailwayApp }: Options) {
   if (!owner || !OWNER_ADDRESS.test(owner) || owner.length > 254) {
     log({ kind: "app-alert", result: "disabled", reason: "ALERT_TO must be one mailbox address" });
     return () => status(503);
@@ -171,6 +175,7 @@ export function createAppAlerts({ path, master, owner, limits, deliver, log, clo
     db.run("CREATE INDEX IF NOT EXISTS alerts_registration ON alerts(registrationId, channel, day)");
     db.run("CREATE INDEX IF NOT EXISTS alerts_due ON alerts(state, due)");
   })();
+  const webhooks = railwayWebhooks(db, probe, clock);
 
   const intake = db.query<{ count: number }, [string, string, number, number]>(`
     INSERT INTO traffic VALUES (?, ?, ?, 1)
@@ -311,10 +316,9 @@ export function createAppAlerts({ path, master, owner, limits, deliver, log, clo
   }
 
   let flushing: Promise<void> | undefined;
-  async function flush() {
+  async function flush(deadline: number) {
     const now = clock();
     const today = stockholmDay(new Date(now));
-    const deadline = Date.now() + 35_000;
     const eligible = db.query<Alert & Registration, [number, string, number]>(`
       SELECT alerts.id, alerts.registrationId, apps.slug, apps.projectId, apps.environmentId, apps.serviceId, apps.domain,
         alerts.detail, alerts.happened, alerts.count, alerts.category, alerts.failures
@@ -336,6 +340,10 @@ export function createAppAlerts({ path, master, owner, limits, deliver, log, clo
       }
       checked += pending.length;
     }
+  }
+
+  function flushQueued(deadline: number) {
+    return flushing ??= flush(deadline).finally(() => { flushing = undefined; });
   }
 
   return async (request: Request): Promise<Response> => {
@@ -366,34 +374,52 @@ export function createAppAlerts({ path, master, owner, limits, deliver, log, clo
       }
       if (request.method !== "POST") return status(405);
       const input = await boundedJson(request, 16_000).catch(() => undefined);
-      if (!record(input) || !Array.isArray(input.observations) || input.observations.length > 20
-        || !input.observations.every(observation)) return status(400);
-      const wait = input.retryAfterMs ?? 0;
-      if (typeof wait !== "number" || !Number.isSafeInteger(wait) || wait < 0 || wait > 30 * dayMs) return status(400);
-      observe.immediate(input.observations, now);
-      const last = input.observations.at(-1);
-      if (last) db.query("UPDATE monitor_cursor SET cursor = ? WHERE id = 1").run(last.slug);
-      if (wait) db.query("UPDATE monitor_cursor SET waitUntil = MAX(waitUntil, ?) WHERE id = 1").run(now + wait);
+      if (!record(input)) return status(400);
+      const processRailwayEvents = input.processRailwayEvents === true;
+      if (!processRailwayEvents) {
+        if (!Array.isArray(input.observations) || input.observations.length > 20 || !input.observations.every(observation)) return status(400);
+        const wait = input.retryAfterMs ?? 0;
+        if (typeof wait !== "number" || !Number.isSafeInteger(wait) || wait < 0 || wait > 30 * dayMs) return status(400);
+        observe.immediate(input.observations, now);
+        const last = input.observations.at(-1);
+        if (last) db.query("UPDATE monitor_cursor SET cursor = ? WHERE id = 1").run(last.slug);
+        if (wait) db.query("UPDATE monitor_cursor SET waitUntil = MAX(waitUntil, ?) WHERE id = 1").run(now + wait);
+      }
       db.query(`
         DELETE FROM alerts WHERE happened < ?
           OR (category != 'error' AND happened < ?)
           OR (state = 'pending' AND happened < ?)
       `).run(now - 30 * dayMs, now - 14 * dayMs, now - 7 * dayMs);
       db.query("DELETE FROM traffic WHERE minute < ?").run(Math.floor(now / 60_000) - 60);
-      if (!flushing) flushing = flush().finally(() => { flushing = undefined; });
-      await flushing;
+      const deadline = Date.now() + 35_000;
+      const [processed] = await Promise.all([
+        processRailwayEvents ? webhooks.process(now, observe) : 0,
+        flushQueued(deadline),
+      ]);
+      // The first flush can finish before probes enqueue their alerts.
+      if (processed) await flushQueued(deadline);
       const failed = db.query<{ count: number }, []>(`
         SELECT COUNT(*) AS count FROM alerts JOIN apps USING (registrationId)
         WHERE alerts.state IN ('failed', 'refused')
       `).get()!.count;
-      return new Response(null, { status: 204, headers: { "X-Runport-Alert-Delivery-Failures": String(failed) } });
+      return new Response(null, { status: 204, headers: {
+        "X-Runport-Alert-Delivery-Failures": String(failed), "X-Runport-Railway-Events-Processed": String(processed),
+      } });
     }
 
-    const match = path.match(/^\/_runport\/alerts\/(register|report)\/([a-z][a-z0-9-]{1,35})$/);
+    const match = path.match(/^\/_runport\/alerts\/(register|report|railway)\/([a-z][a-z0-9-]{1,35})$/);
     if (!match) return status(404);
     const [, action, slug] = match;
     const retiring = action === "register" && request.method === "DELETE";
     if (request.method !== "POST" && !retiring) return status(405);
+    if (action === "railway") {
+      const app = db.query<Deployment, [string]>("SELECT * FROM apps WHERE slug = ?").get(slug);
+      if (!app || !authenticated(request, key(master, `railway:${slug}:${app.projectId}:${app.environmentId}:${app.serviceId}:${app.registrationId}`))) return status(401);
+      const payload = await boundedJson(request, 24_000).catch(() => undefined);
+      if (!record(payload)) return status(400);
+      webhooks.receive(app, payload, clock());
+      return status(204);
+    }
     const reportingApp = action === "report" ? db.query<Deployment, [string]>("SELECT * FROM apps WHERE slug = ?").get(slug) : null;
     if (action === "report" && !reportingApp) return status(404);
     const expected = reportingApp ? reportKey(master, slug, reportingApp.serviceId, reportingApp.environmentId) : registrationKey(master);
@@ -401,9 +427,11 @@ export function createAppAlerts({ path, master, owner, limits, deliver, log, clo
     const input = await boundedJson(request, 512).catch(() => undefined);
     if (retiring) {
       if (!record(input) || typeof input.serviceId !== "string" || !UUID.test(input.serviceId) ||
-        typeof input.environmentId !== "string" || !UUID.test(input.environmentId)) return status(400);
+        typeof input.environmentId !== "string" || !UUID.test(input.environmentId) ||
+        (input.registrationId !== undefined && (typeof input.registrationId !== "string" || !UUID.test(input.registrationId)))) return status(400);
       const existing = db.query<Deployment, [string]>("SELECT * FROM apps WHERE slug = ?").get(slug);
-      if (existing && existing.serviceId === input.serviceId && existing.environmentId === input.environmentId) retire(existing);
+      if (existing && existing.serviceId === input.serviceId && existing.environmentId === input.environmentId &&
+          (input.registrationId === undefined || existing.registrationId === input.registrationId)) retire(existing);
       return status(204);
     }
     if (action === "register") {

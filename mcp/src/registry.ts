@@ -2,6 +2,7 @@ import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 import { config, registryFile } from "./config";
 import type { GitHost } from "./git-host";
+import type { RailwayWebhook } from "./railway-webhook";
 
 // The list of apps the platform made. No secrets here: keys live in each
 // app's gitignored .env.local.
@@ -18,7 +19,7 @@ export type AppRecord = {
   git: GitHost;
   setupPending?: true;
   createdAt: string;
-  alerts?: { origin: string; keychainService: string; environmentId: string; serviceId: string };
+  alerts?: { origin: string; keychainService: string; environmentId: string; serviceId: string; registrationId?: string; webhook?: RailwayWebhook };
 };
 
 type Registry = { apps: AppRecord[] };
@@ -26,7 +27,7 @@ type Registry = { apps: AppRecord[] };
 export async function loadRegistry(file = registryFile()): Promise<Registry> {
   try {
     const stored = JSON.parse(await readFile(file, "utf8")) as { apps: (Omit<AppRecord, "git"> & { git?: GitHost })[] };
-    return { apps: stored.apps.map((app) => ({ ...app, git: app.git ?? "github" })) };
+    return { ...stored, apps: stored.apps.map((app) => ({ ...app, git: app.git ?? "github" })) };
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return { apps: [] };
     throw error;

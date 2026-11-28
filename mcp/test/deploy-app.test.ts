@@ -1,14 +1,15 @@
 import { expect, test } from "bun:test";
 import { createHmac } from "node:crypto";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { websiteId } from "../src/analytics";
 
-test("deploy-app provisions analytics and alerts before deploying the app", async () => {
+test.each(["deploy", "backfill", "wrong-project", "wrong-environment", "missing-pins"] as const)("%s only registers the intended app alerts", async (operation) => {
   const root = await mkdtemp(join(tmpdir(), "runport-deploy-fixture-"));
   try {
-    const slug = "fixture-app";
+    const backfill = operation !== "deploy";
+    const slug = backfill ? "todo" : "fixture-app";
     const domain = "fixture.up.railway.app";
     const folder = join(root, slug);
     const bin = join(root, "bin");
@@ -19,8 +20,11 @@ test("deploy-app provisions analytics and alerts before deploying the app", asyn
     const projectId = "00000000-0000-0000-0000-000000000001";
     const environmentId = "00000000-0000-0000-0000-000000000002";
     const serviceId = "00000000-0000-0000-0000-000000000003";
+    const workspaceId = "00000000-0000-0000-0000-000000000004";
+    const registrationId = "00000000-0000-0000-0000-000000000006";
+    const webhookId = "00000000-0000-0000-0000-000000000005";
     const project = {
-      id: projectId,
+      id: projectId, workspaceId, name: `${slug}-app`,
       environments: { edges: [{ node: { name: "production", id: environmentId } }] },
       services: { edges: [{ node: { name: "web", id: serviceId } }] },
     };
@@ -39,8 +43,11 @@ test("deploy-app provisions analytics and alerts before deploying the app", asyn
       await mkdir(dirname(file), { recursive: true });
       await writeFile(file, data);
     }
-    const initialRegistry = JSON.stringify({ apps: [{ slug, name: "Deployment fixture", projectId: slug, folder, port: 3101,
-      git: "github", repoUrl: null, createdByPlatform: true, createdAt: "2026-11-27T00:00:00Z" }] });
+    const initialRegistry = JSON.stringify({ ...(backfill ? { registryPeerField: "kept" } : {}),
+      apps: [{ slug, name: "Deployment fixture", projectId: slug, folder, port: 3101,
+      git: "github", repoUrl: null, createdByPlatform: true, createdAt: "2026-11-27T00:00:00Z",
+      ...(backfill ? { peerField: "kept", alerts: { accountMaintenance: true, peerField: "kept" } } : {}),
+    }] });
     await writeFile(registry, initialRegistry);
     await writeFile(join(root, "registry.backup.json"), initialRegistry);
     await writeFile(join(bin, "railway"), `#!${process.execPath}
@@ -75,6 +82,9 @@ globalThis.fetch = async (input, options) => {
   appendFileSync(process.env.FIXTURE_EVENTS, JSON.stringify({ method, url: url.href, body }) + "\\n");
   if (url.href === "https://backboard.railway.com/graphql/v2") {
     if (options.headers.Authorization !== "Bearer fixture-railway-token") throw new Error("Unexpected Railway credential");
+    if (body.query.includes("serviceDomains")) return Response.json({data:{serviceInstance:{domains:{serviceDomains:[{domain:"${domain}"}]}}}});
+    if (body.query.includes("notificationRules")) return Response.json({data:{notificationRules:[]}});
+    if (body.query.includes("notificationRuleCreate")) return Response.json({data:{notificationRuleCreate:{id:"${webhookId}"}}});
     return Response.json({ data: { serviceInstanceUpdate: true } });
   }
   if (url.href === "https://appwrite.example.test/v1/account/sessions/email")
@@ -90,11 +100,15 @@ globalThis.fetch = async (input, options) => {
   if (url.href === "https://analytics.example.test/api/websites" && method === "POST")
     return Response.json({ id: body.id, domain: body.domain });
   if (url.href === "https://alerts.example.test/_runport/alerts/register/${slug}" && method === "POST")
-    return new Response(null, { status: 204 });
+    return new Response(null, { status: 204, headers: { "X-Runport-Registration-Id": "${registrationId}" } });
   throw new Error("Network access outside the isolated deploy fixture: " + url.href);
 };
 `);
-    const proc = Bun.spawn([process.execPath, "--preload", preload, join(import.meta.dir, "../src/deploy-app.ts"), slug], {
+    const script = backfill ? "backfill-app-alerts.ts" : "deploy-app.ts";
+    const pinnedProject = operation === "wrong-project" ? workspaceId : projectId;
+    const pinnedEnvironment = operation === "wrong-environment" ? workspaceId : environmentId;
+    const arg = backfill && operation !== "missing-pins" ? `${slug}:${pinnedProject}:${pinnedEnvironment}` : slug;
+    const proc = Bun.spawn([process.execPath, "--preload", preload, join(import.meta.dir, "../src", script), arg], {
       cwd: root,
       env: {
         PATH: [bin, dirname(process.execPath), "/usr/bin", "/bin"].join(":"),
@@ -107,17 +121,48 @@ globalThis.fetch = async (input, options) => {
       stdout: "pipe", stderr: "pipe",
     });
     const [out, err, exit] = await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text(), proc.exited]);
+    if (backfill && operation !== "backfill") {
+      expect(exit).not.toBe(0);
+      expect(err).toContain(operation === "missing-pins" ? "Expected slug:project-id:environment-id" : "Railway target mismatch for todo");
+      const calls = await readFile(events, "utf8").catch(() => "");
+      expect(calls).not.toContain('"url"');
+      expect(await readFile(registry, "utf8")).toBe(initialRegistry);
+      expect((await readdir(root)).some(name => name.startsWith(".platform.json.alerts-backup-"))).toBe(false);
+      return;
+    }
     if (exit !== 0) throw new Error(out + err);
     const calls = (await readFile(events, "utf8")).trim().split("\n").map(line => JSON.parse(line));
+    if (operation === "backfill") {
+      const call = calls.find(event => event.url === `https://alerts.example.test/_runport/alerts/register/${slug}`);
+      expect(call.body).toEqual({ slug, projectId, environmentId, serviceId, domain });
+      expect(calls.some(event => event.args?.[0] === "up")).toBe(false);
+      const { apps, registryPeerField } = JSON.parse(await readFile(registry, "utf8"));
+      expect(registryPeerField).toBe("kept");
+      expect(apps).toHaveLength(1);
+      expect(apps[0]).toMatchObject({ peerField: "kept", alerts: { accountMaintenance: true, peerField: "kept", registrationId } });
+      const [backup] = (await readdir(root)).filter(name => name.startsWith(".platform.json.alerts-backup-"));
+      expect(await readFile(join(root, backup!), "utf8")).toBe(initialRegistry);
+      return;
+    }
     const siteId = websiteId(slug);
     const analytics = calls.findIndex(call => call.url === "https://analytics.example.test/api/websites");
     const registration = calls.findIndex(call => call.url === `https://alerts.example.test/_runport/alerts/register/${slug}`);
+    const webhook = calls.findIndex(call => call.body?.query?.includes("notificationRuleCreate"));
     const deploy = calls.findIndex(call => call.args?.[0] === "up");
     expect(analytics).toBeGreaterThanOrEqual(0);
     expect(registration).toBeGreaterThan(analytics);
-    expect(deploy).toBeGreaterThan(registration);
+    expect(webhook).toBeGreaterThan(registration);
+    expect(deploy).toBeGreaterThan(webhook);
     expect(calls[analytics].body).toMatchObject({ id: siteId, domain });
     expect(calls[registration].body).toEqual({ slug, projectId, environmentId, serviceId, domain });
+    const webhookSecret = createHmac("sha256", master).update(`runport-app-alerts:railway:${slug}:${projectId}:${environmentId}:${serviceId}:${registrationId}`).digest("hex");
+    const webhookBinding = createHmac("sha256", master).update(`runport-app-alerts:railway-url:v1:${slug}:${projectId}:${environmentId}:${serviceId}:${registrationId}`).digest("hex").slice(0, 24);
+    expect(calls[webhook].body.variables.input).toMatchObject({
+      projectId, workspaceId, ephemeralEnvironments: false,
+      channelConfigs: [{type: "webhook", url: `https://alerts.example.test/_runport/alerts/railway/${slug}?binding=${webhookBinding}`,
+        headers: {Authorization: `Bearer ${webhookSecret}`}}],
+    });
+    expect(out + err).not.toContain(webhookSecret);
     expect(calls.find(call => call.url?.endsWith("/project/smtp")).body.username).toBe(`${slug}:login`);
     const variables = calls.find(call => call.args?.[0] === "variables" && call.args.includes("--set")).args;
     expect(variables).toContain(`ANALYTICS_SITE_ID=${siteId}`);
@@ -130,6 +175,9 @@ globalThis.fetch = async (input, options) => {
     const original = JSON.parse(await readFile(join(root, "registry.backup.json"), "utf8")).apps;
     expect(apps).toHaveLength(original.length);
     expect(apps[0]).toMatchObject({ ...original[0], alerts: { environmentId, serviceId } });
+    expect(apps[0].alerts.registrationId).toBe(registrationId);
+    expect(apps[0].alerts.webhook).toEqual({ id: webhookId, projectId, workspaceId });
+    expect(JSON.stringify(apps)).not.toContain(webhookSecret);
   } finally {
     await rm(root, { recursive: true, force: true });
   }

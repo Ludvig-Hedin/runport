@@ -69,6 +69,7 @@ The app's private Git remote is on Runport Git or GitHub, as chosen at setup.
   Only fixed error labels and a fingerprint reach Runport. Error messages,
   request URLs, headers, cookies and form data stay out of reports. Handled
   failures you convert into a response are outside Next.js error instrumentation.
+  Railway deployment webhooks cover outages independently of those reports.
 
 ## Switches (env vars)
 
