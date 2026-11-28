@@ -1,5 +1,6 @@
 import { expect, test } from "bun:test";
 import { createAppAlerts, monitorKey, registrationKey, reportKey } from "../src/app-alerts";
+import { createHmac } from "node:crypto";
 import { cloudflareDelivery, DeliveryError, type Deliver } from "../src/deliver";
 import { Limits } from "../src/limits";
 
@@ -17,8 +18,8 @@ const error = { source: "route", kind: "TypeError", fingerprint: "a".repeat(64) 
 const appKey = (app: string) => reportKey(master, app, deployment.serviceId, deployment.environmentId);
 const hour = 60 * 60_000;
 
-function fixture({ total = 100, alertPerApp = 10, recipient = owner, delivery }:
-  { total?: number; alertPerApp?: number; recipient?: string; delivery?: Deliver } = {}) {
+function fixture({ total = 100, alertPerApp = 10, recipient = owner, delivery, probe }:
+  { total?: number; alertPerApp?: number; recipient?: string; delivery?: Deliver; probe?: (domain: string) => Promise<boolean> } = {}) {
   let now = Date.UTC(2026, 10, 10, 9);
   let failure: Error | undefined;
   const inbox: Array<{ to: string[]; raw: string }> = [];
@@ -28,7 +29,7 @@ function fixture({ total = 100, alertPerApp = 10, recipient = owner, delivery }:
     perAppForm: 50, perHourForm: 10, formShare: 0.1,
   });
   const handle = createAppAlerts({
-    path: ":memory:", master, owner: recipient, limits, clock: () => now,
+    path: ":memory:", master, owner: recipient, limits, clock: () => now, probe,
     deliver: delivery ?? (async ({ to }, raw) => {
       if (failure) throw failure;
       inbox.push({ to, raw: raw.toString() });
@@ -56,9 +57,94 @@ function fixture({ total = 100, alertPerApp = 10, recipient = owner, delivery }:
     return request("/internal/app-alerts", monitorKey(master), { observations, retryAfterMs: wait });
   };
   const stats = () => limits.today(new Date(now));
-  return { inbox, logs, limits, request, register, report, poll, list, stats, clock: () => now,
+  const maintenance = () => request("/internal/app-alerts", monitorKey(master), { processRailwayEvents: true });
+  return { inbox, logs, limits, request, register, report, poll, list, stats, maintenance, clock: () => now,
     tick: (time: number) => { now += time; }, fail: (error?: Error) => { failure = error; } };
 }
+
+const railwayDeploymentId = "00000000-0000-0000-0000-000000000004";
+const railwayKey = (app = slug) => createHmac("sha256", master)
+  .update(`runport-app-alerts:railway:${app}:${deployment.projectId}:${deployment.environmentId}:${deployment.serviceId}`).digest("hex");
+const railwayEvent = (type: string, time: number, id = railwayDeploymentId) => ({
+  type, timestamp: new Date(time).toISOString(), details: { id, commitMessage: "private fixture metadata" },
+  resource: { project: { id: deployment.projectId }, environment: { id: deployment.environmentId },
+    service: { id: deployment.serviceId }, deployment: { id } },
+});
+
+test("Railway webhooks bind the secret to the registered app and all Railway IDs", async () => {
+  let probes = 0;
+  const f = fixture({ probe: async () => { probes++; return false; } });
+  await f.register();
+  await f.register("other-app");
+  const event = railwayEvent("Deployment.crashed", f.clock());
+  const route = "/_runport/alerts/railway/" + slug;
+  expect((await f.request(route, railwayKey("other-app"), event)).status).toBe(401);
+  for (const key of ["project", "environment", "service"] as const) {
+    const wrong = { ...event, resource: { ...event.resource, [key]: { id: railwayDeploymentId } } };
+    expect((await f.request(route, railwayKey(), wrong)).status).toBe(204);
+  }
+  const response = await f.maintenance();
+  expect(response.status).toBe(204);
+  expect(await response.text()).toBe("");
+  expect(probes).toBe(0);
+  expect(f.inbox).toHaveLength(0);
+  expect(JSON.stringify(f.logs)).not.toContain(railwayKey());
+});
+
+test("Railway duplicates and sleeping do not alert, and recovery needs a healthy public app", async () => {
+  let healthy = false;
+  const f = fixture({ probe: async () => healthy });
+  await f.register();
+  const push = (type: string, time = f.clock(), id?: string) =>
+    f.request("/_runport/alerts/railway/" + slug, railwayKey(), railwayEvent(type, time, id));
+  await push("Deployment.sleeping");
+  await f.maintenance();
+  expect(f.inbox).toHaveLength(0);
+  f.tick(1000);
+  const failureTime = f.clock();
+  await push("Deployment.crashed", failureTime);
+  await push("Deployment.crashed", failureTime);
+  await f.maintenance();
+  await f.maintenance();
+  expect(f.inbox.map(({ to }) => to)).toEqual([[owner]]);
+  f.tick(1000);
+  await push("Deployment.deployed", f.clock(), "00000000-0000-0000-0000-000000000005");
+  await f.maintenance();
+  expect(f.inbox).toHaveLength(1);
+  healthy = true;
+  f.tick(60_000);
+  await f.maintenance();
+  await push("Deployment.crashed", failureTime);
+  await f.maintenance();
+  expect(f.inbox.map(({ to }) => to)).toEqual([[owner], [owner]]);
+  expect(f.inbox[1].raw).toContain("Appen svarar igen");
+  const captured = JSON.stringify([f.inbox, f.logs]);
+  expect(captured).not.toContain("private fixture metadata");
+  expect(captured).not.toContain(railwayKey());
+});
+
+test("Railway does not confuse a replaced deployment with an outage", async () => {
+  let reachable = true;
+  let probes = 0;
+  const f = fixture({ probe: async () => { probes++; return reachable; } });
+  await f.register();
+  const path = "/_runport/alerts/railway/" + slug;
+  const latest = "00000000-0000-0000-0000-000000000006";
+  await f.request(path, railwayKey(), railwayEvent("Deployment.deployed", f.clock(), latest));
+  f.tick(1000);
+  reachable = false;
+  await f.request(path, railwayKey(), railwayEvent("Deployment.removed", f.clock()));
+  await f.maintenance();
+  expect(probes).toBe(1);
+  expect(f.inbox).toHaveLength(0);
+  f.tick(1000);
+  await f.request(path, railwayKey(), railwayEvent("Deployment.removed", f.clock(), latest));
+  f.tick(1000);
+  reachable = true;
+  await f.request(path, railwayKey(), railwayEvent("Deployment.restarted", f.clock(), latest));
+  await f.maintenance();
+  expect(f.inbox.map(({ to }) => to)).toEqual([[owner], [owner]]);
+});
 
 test("the shared browser intake cap covers all registered apps without consuming server capacity", async () => {
   const f = fixture();

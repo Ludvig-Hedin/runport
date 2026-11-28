@@ -1,4 +1,4 @@
-import { checkDeployedApps } from "./app-alert-monitor";
+import { processAppAlerts } from "./app-alert-monitor";
 import { analyticsOwnerAlert, updateIncident, type MonitorState } from "./monitor-alerts";
 
 // Every few minutes: is the API up, is the mail gateway up, and is last
@@ -69,8 +69,8 @@ async function checkPlatform() {
 }
 
 const jobs = [{ name: "platform monitor", run: checkPlatform() }];
-if (process.env.RUNPORT_ALERT_MONITOR_KEY && process.env.RAILWAY_MONITOR_TOKEN) {
-  jobs.push({ name: "app alerts", run: checkDeployedApps() });
+if (process.env.RUNPORT_ALERT_MONITOR_KEY) {
+  jobs.push({ name: "app alerts", run: processAppAlerts() });
 }
 
 const results = await Promise.allSettled(jobs.map(job => job.run));

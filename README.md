@@ -33,7 +33,7 @@ Vercel, Clerk, Convex or Resend.
 | Hosting online (Railway) | Appwrite, mail gateway and one app online, tested end to end |
 | Visitor analytics | Cookieless pageviews and custom events for production apps, using self-hosted Umami |
 | Backups and outage alerts | Nightly Appwrite, Git and analytics backups kept for 14 days. Health checks run every five minutes. |
-| Error alerts per app | Next.js reports errors to Runport. Owner-only email and Railway outage checks need the [app alert rollout](infra/railway/README.md#app-alerts). |
+| Error alerts per app | Next.js reports errors to Runport. Railway webhooks and public health checks detect outages. Owner-only mail needs the [app alert rollout](infra/railway/README.md#app-alerts). |
 | Own addresses (`*.runport.app`) | Admin live at admin.runport.app; app addresses via custom-domain.ts |
 | Contact forms and SEO | Starter includes spam checks, owner email, sitemaps and social cards |
 | Newsletters | Not yet: Cloudflare is for transactional mail |

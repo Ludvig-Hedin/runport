@@ -1,10 +1,12 @@
 import { createHmac } from "node:crypto";
 import { config } from "./config";
 import { readSecret } from "./keychain";
+import { ensureRailwayWebhook } from "./railway-webhook";
 import type { AppRecord } from "./registry";
 
 export type RailwayProject = {
   id: string;
+  workspaceId: string;
   environments: { edges: { node: { id: string; name: string } }[] };
   services: { edges: { node: { id: string; name: string } }[] };
 };
@@ -39,9 +41,17 @@ export async function registerAppAlerts(slug: string, project: RailwayProject, d
   const keychainService = config.keychainService;
   const { target, key, update } = await setup(process.env.PLATFORM_ALERT_ORIGIN ?? "https://admin.runport.app", keychainService);
   const service = webService(project);
+  if (!project.workspaceId) throw new Error("Could not identify the Railway workspace for app alerts.");
   await update(slug, "POST", { slug, ...service, domain });
+  const scope = `${slug}:${service.projectId}:${service.environmentId}:${service.serviceId}`;
+  const webhookUrl = new URL(`/_runport/alerts/railway/${slug}`, target);
+  webhookUrl.searchParams.set("binding", key(`railway-url:v1:${scope}`).slice(0, 24));
+  const webhook = await ensureRailwayWebhook(
+    { projectId: service.projectId, workspaceId: project.workspaceId },
+    webhookUrl.href, key(`railway:${scope}`),
+  );
   return {
-    registration: { origin: target.origin, keychainService, environmentId: service.environmentId, serviceId: service.serviceId },
+    registration: { origin: target.origin, keychainService, environmentId: service.environmentId, serviceId: service.serviceId, webhook },
     RUNPORT_ERROR_URL: new URL(`/_runport/alerts/report/${slug}`, target).href,
     RUNPORT_ERROR_TOKEN: key(`report:${slug}:${service.serviceId}:${service.environmentId}`),
   };

@@ -39,6 +39,7 @@ Bun.serve({
     if (pathname === "/health") return new Response("ok");
     if (pathname === "/stats") return Response.json(limits.today());
     if (pathname === "/internal/app-alerts") server.timeout(req, 60);
+    if (pathname.startsWith("/_runport/alerts/railway/")) server.timeout(req, 25);
     return appAlerts(req);
   },
 });

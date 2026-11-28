@@ -19,8 +19,10 @@ test("deploy-app provisions analytics and alerts before deploying the app", asyn
     const projectId = "00000000-0000-0000-0000-000000000001";
     const environmentId = "00000000-0000-0000-0000-000000000002";
     const serviceId = "00000000-0000-0000-0000-000000000003";
+    const workspaceId = "00000000-0000-0000-0000-000000000004";
+    const webhookId = "00000000-0000-0000-0000-000000000005";
     const project = {
-      id: projectId,
+      id: projectId, workspaceId,
       environments: { edges: [{ node: { name: "production", id: environmentId } }] },
       services: { edges: [{ node: { name: "web", id: serviceId } }] },
     };
@@ -75,6 +77,8 @@ globalThis.fetch = async (input, options) => {
   appendFileSync(process.env.FIXTURE_EVENTS, JSON.stringify({ method, url: url.href, body }) + "\\n");
   if (url.href === "https://backboard.railway.com/graphql/v2") {
     if (options.headers.Authorization !== "Bearer fixture-railway-token") throw new Error("Unexpected Railway credential");
+    if (body.query.includes("notificationRules")) return Response.json({data:{notificationRules:[]}});
+    if (body.query.includes("notificationRuleCreate")) return Response.json({data:{notificationRuleCreate:{id:"${webhookId}"}}});
     return Response.json({ data: { serviceInstanceUpdate: true } });
   }
   if (url.href === "https://appwrite.example.test/v1/account/sessions/email")
@@ -112,12 +116,22 @@ globalThis.fetch = async (input, options) => {
     const siteId = websiteId(slug);
     const analytics = calls.findIndex(call => call.url === "https://analytics.example.test/api/websites");
     const registration = calls.findIndex(call => call.url === `https://alerts.example.test/_runport/alerts/register/${slug}`);
+    const webhook = calls.findIndex(call => call.body?.query?.includes("notificationRuleCreate"));
     const deploy = calls.findIndex(call => call.args?.[0] === "up");
     expect(analytics).toBeGreaterThanOrEqual(0);
     expect(registration).toBeGreaterThan(analytics);
-    expect(deploy).toBeGreaterThan(registration);
+    expect(webhook).toBeGreaterThan(registration);
+    expect(deploy).toBeGreaterThan(webhook);
     expect(calls[analytics].body).toMatchObject({ id: siteId, domain });
     expect(calls[registration].body).toEqual({ slug, projectId, environmentId, serviceId, domain });
+    const webhookSecret = createHmac("sha256", master).update(`runport-app-alerts:railway:${slug}:${projectId}:${environmentId}:${serviceId}`).digest("hex");
+    const webhookBinding = createHmac("sha256", master).update(`runport-app-alerts:railway-url:v1:${slug}:${projectId}:${environmentId}:${serviceId}`).digest("hex").slice(0, 24);
+    expect(calls[webhook].body.variables.input).toMatchObject({
+      projectId, workspaceId, ephemeralEnvironments: false,
+      channelConfigs: [{type: "webhook", url: `https://alerts.example.test/_runport/alerts/railway/${slug}?binding=${webhookBinding}`,
+        headers: {Authorization: `Bearer ${webhookSecret}`}}],
+    });
+    expect(out + err).not.toContain(webhookSecret);
     expect(calls.find(call => call.url?.endsWith("/project/smtp")).body.username).toBe(`${slug}:login`);
     const variables = calls.find(call => call.args?.[0] === "variables" && call.args.includes("--set")).args;
     expect(variables).toContain(`ANALYTICS_SITE_ID=${siteId}`);
@@ -130,6 +144,8 @@ globalThis.fetch = async (input, options) => {
     const original = JSON.parse(await readFile(join(root, "registry.backup.json"), "utf8")).apps;
     expect(apps).toHaveLength(original.length);
     expect(apps[0]).toMatchObject({ ...original[0], alerts: { environmentId, serviceId } });
+    expect(apps[0].alerts.webhook).toEqual({ id: webhookId, projectId, workspaceId });
+    expect(JSON.stringify(apps)).not.toContain(webhookSecret);
   } finally {
     await rm(root, { recursive: true, force: true });
   }

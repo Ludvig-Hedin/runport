@@ -92,8 +92,7 @@ export function assertAppAlertsPlan(plan: unknown, requireNoop = false, storageO
     if (storageOnly && attachesGatewayVolume) continue;
     const value = after?.type === "literal" && typeof after.value === "string" ? after.value : "";
     const allowed = (address === "service.mail-gateway" && variable === "ALERT_TO" && value === "ludvig@ludvighedin.com") ||
-      (address === "service.monitor" && variable === "RUNPORT_ALERT_MONITOR_KEY" && /^[a-f0-9]{64}$/.test(value)) ||
-      (address === "service.monitor" && variable === "RAILWAY_MONITOR_TOKEN" && /^[A-Za-z0-9_.-]{16,2048}$/.test(value));
+      (address === "service.monitor" && variable === "RUNPORT_ALERT_MONITOR_KEY" && /^[a-f0-9]{64}$/.test(value));
     if (storageOnly || !allowed || severity !== "safe" || kind !== "variable.set" || path !== `resources.${address}.variables.${variable}`) {
       throw new Error("Railway plan includes a change outside the app alerts allowlist.");
     }
