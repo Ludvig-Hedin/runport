@@ -9,6 +9,7 @@ import { accountMaintenanceKey, registerAppAlerts, webService, type RailwayProje
 import { formMailSettings } from "./form-mail";
 import { readSecret } from "./keychain";
 import { railwayApi } from "./railway-api";
+import { loginSmtp } from "./login-smtp";
 import { loadRegistry, upsertApp } from "./registry";
 import { assertAppwriteId } from "./slug";
 import { provisionAppAnalytics } from "./analytics-integration";
@@ -45,6 +46,11 @@ const linked = await railway(["status", "--json"]).then(
   (out) => JSON.parse(out) as { name: string },
   () => null,
 );
+// A folder with no link of its own inherits a parent folder's link, which can
+// be any other project. Only the app's own project may be used.
+if (linked && linked.name !== `${slug}-app`) {
+  throw new Error(`${app.folder} is linked to the Railway project "${linked.name}", not "${slug}-app". Nothing was changed. Unlink it with \`railway unlink\` first.`);
+}
 if (!linked) await railway(["init", "--name", `${slug}-app`, "--json"]);
 const services = JSON.parse(await railway(["status", "--json"])).services.edges as { node: { name: string } }[];
 if (!services.some((s) => s.node.name === "web")) await railway(["add", "--service", "web"]);
@@ -58,14 +64,7 @@ console.log(`app address: https://${domain}`);
 if (!(await admin.getProject(slug))) await admin.createProject(slug, app.name);
 await admin.addWebPlatform(slug, domain);
 const masterKey = await readSecret("mail-master-key");
-await admin.setProjectSmtp(slug, {
-  senderName: app.name,
-  senderEmail: `${slug}@${config.mailDomain}`,
-  host: "mail-gateway.railway.internal",
-  port: 2525,
-  username: `${slug}:login`,
-  password: new Bun.CryptoHasher("sha256", masterKey).update(`mail-gateway-login:${slug}`).digest("hex"),
-});
+await admin.setProjectSmtp(slug, loginSmtp(slug, app.name, masterKey, config.mailDomain));
 // Reuse the key already stored on Railway, so reruns do not pile up keys.
 const current = JSON.parse(await railway(["variables", "--service", "web", "--environment", "production", "--json"], undefined, true)) as Record<string, string>;
 const key = current.APPWRITE_PROJECT_ID === slug && current.APPWRITE_API_KEY

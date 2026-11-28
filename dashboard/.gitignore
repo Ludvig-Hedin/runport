@@ -1,0 +1,8 @@
+node_modules/
+.next/
+.env
+.env.local
+.mcp.json
+next-env.d.ts
+*.tsbuildinfo
+.DS_Store
