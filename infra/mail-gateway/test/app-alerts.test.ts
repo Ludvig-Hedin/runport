@@ -351,3 +351,20 @@ test("account maintenance enumerates every registration during a Railway alerts 
   expect(last.next).toBeNull();
   expect(f.inbox).toHaveLength(0);
 });
+
+test.each([true, false])("alerts-only registration preserves maintenance in either rollout order (maintenance first: %s)", async (maintenanceFirst) => {
+  const f = fixture();
+  const enrolment = async () => {
+    const response = await f.request("/internal/app-alerts?accountMaintenanceAfter=", monitorKey(master));
+    return (await response.json()).apps.map((app: { slug: string }) => app.slug);
+  };
+  if (!maintenanceFirst) {
+    expect((await f.register()).status).toBe(204);
+    expect(await enrolment()).toEqual([]);
+  }
+  expect((await f.register(slug, true)).status).toBe(204);
+  expect((await f.register()).status).toBe(204);
+  expect(await enrolment()).toEqual([slug]);
+  expect((await f.register(slug, false)).status).toBe(204);
+  expect(await enrolment()).toEqual([]);
+});

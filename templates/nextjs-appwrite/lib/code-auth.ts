@@ -14,6 +14,7 @@ import {
 import { allowed } from "./rate-limit";
 import { setSessionCookie } from "./session";
 import { routes } from "@/runport.config";
+import { isReservedAccountEmail } from "./account-deletion";
 
 // Sign-in with a one-time code by email. The same flow creates new accounts.
 
@@ -23,7 +24,7 @@ const WRONG_CODE = "That code is not right. Check the email and try again.";
 const EXPIRED_CODE = "This code has expired. Send a new code.";
 
 async function sendCode(email: string): Promise<CodeState> {
-  if (!isEmail(email)) return { step: "email", email, error: INVALID_EMAIL };
+  if (!isEmail(email) || isReservedAccountEmail(email)) return { step: "email", email, error: INVALID_EMAIL };
   if (!(await allowed("sendCode", email))) return { step: "email", email, error: TOO_MANY_ATTEMPTS };
   try {
     const { account } = createAdminClient();

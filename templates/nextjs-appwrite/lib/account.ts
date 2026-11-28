@@ -5,7 +5,7 @@ import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 import { after } from "next/server";
 import { routes } from "../runport.config";
-import { finishPendingDeletions, requestAccountDeletion } from "./account-deletion";
+import { finishPendingDeletions, hasDeletionRecord, requestAccountDeletion } from "./account-deletion";
 import { createAdminClient, createSessionClient, sessionCookieName } from "./appwrite";
 import { setFlash } from "./flash";
 import { TOO_MANY_ATTEMPTS, friendlyError } from "./auth-errors";
@@ -20,11 +20,11 @@ export type AccountState = { error?: string; notice?: string; name?: string; sig
 
 const SIGNED_OUT: AccountState = { error: "You are signed out. Sign in again.", signedOut: true };
 
-async function guard(): Promise<{ email: string } | AccountState> {
+async function guard() {
   const user = await getUser();
   if (!user) return SIGNED_OUT;
   if (!(await allowed("account", user.email))) return { error: TOO_MANY_ATTEMPTS };
-  return { email: user.email };
+  return { user };
 }
 
 /** Deletes every session except the one making this request. */
@@ -38,12 +38,13 @@ async function endOtherSessions(): Promise<number> {
 
 export async function updateName(_: AccountState, form: FormData): Promise<AccountState> {
   const check = await guard();
-  if ("error" in check) return check;
+  if (!("user" in check)) return check;
   const name = String(form.get("name") ?? "").trim();
   if (!name) return { error: "Enter a name." };
   if (name.length > 128) return { error: "Use at most 128 characters." };
   try {
     const { account } = await createSessionClient();
+    if (await hasDeletionRecord(createAdminClient().tables, check.user)) return SIGNED_OUT;
     const saved = await account.updateName({ name });
     return { notice: "Saved.", name: saved.name };
   } catch (error) {
@@ -54,13 +55,14 @@ export async function updateName(_: AccountState, form: FormData): Promise<Accou
 export async function changePassword(_: AccountState, form: FormData): Promise<AccountState> {
   if (authMode() !== "password") return { error: "This app signs in with email codes, so there is no password." };
   const check = await guard();
-  if ("error" in check) return check;
+  if (!("user" in check)) return check;
   const oldPassword = String(form.get("current") ?? "");
   const password = String(form.get("password") ?? "");
   if (password.length < 8) return { error: "Password needs at least 8 characters." };
   if (password === oldPassword) return { error: "Choose a password that differs from the current one." };
   try {
     const { account } = await createSessionClient();
+    if (await hasDeletionRecord(createAdminClient().tables, check.user)) return SIGNED_OUT;
     await account.updatePassword({ password, oldPassword });
   } catch (error) {
     if (error instanceof AppwriteException && error.type === "user_invalid_credentials") {
@@ -80,7 +82,7 @@ export async function changePassword(_: AccountState, form: FormData): Promise<A
 /** Signs out one other device, or every other device when no id is given. */
 export async function signOutDevices(sessionId?: string): Promise<AccountState> {
   const check = await guard();
-  if ("error" in check) return check;
+  if (!("user" in check)) return check;
   try {
     if (!sessionId) {
       await endOtherSessions();

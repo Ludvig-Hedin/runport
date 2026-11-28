@@ -16,9 +16,11 @@ export type TableSpec = {
   columns: ColumnSpec[];
   serverOnly?: boolean;
   /**
-   * Each row belongs to one person. Setup adds an indexed `owner` column
-   * (and fills it for older rows that clearly have one owner).
-   * Set the owner on the server with `ownerData()` from lib/owner.ts.
+   * Each row belongs only to its owner, for the lifetime of the row.
+   * Create rows through `ownerData()` so the owner and row permissions
+   * come from the session. Never change the owner or permissions.
+   * Use a separate table for shared rows. Setup indexes and backfills
+   * `owner` on older rows that already have one clear owner.
    */
   personal?: boolean;
 };
@@ -33,6 +35,9 @@ export const TABLES: TableSpec[] = [
     columns: [
       { type: "varchar", key: "userId", size: 36, required: true },
       { type: "varchar", key: "userCreatedAt", size: 64, required: true },
+      { type: "varchar", key: "placeholderEmail", size: 128, required: false },
+      { type: "varchar", key: "verifiedAt", size: 64, required: false },
+      { type: "varchar", key: "remaining", size: 128, required: false },
     ],
   },
   {

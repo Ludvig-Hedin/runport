@@ -7,13 +7,21 @@ export type RailwayProject = {
   id: string;
   environments: { edges: { node: { id: string; name: string } }[] };
   services: { edges: { node: { id: string; name: string } }[] };
+  accountMaintenance?: boolean;
 };
 
 export function webService(project: RailwayProject) {
   const environmentId = project.environments.edges.find(({ node }) => node.name === "production")?.node.id;
   const serviceId = project.services.edges.find(({ node }) => node.name === "web")?.node.id;
   if (!project.id || !environmentId || !serviceId) throw new Error("Could not identify Railway's production web service.");
-  return { projectId: project.id, environmentId, serviceId };
+  return { projectId: project.id, environmentId, serviceId, accountMaintenance: project.accountMaintenance };
+}
+
+export function accountMaintenanceKey(master: string, slug: string, project: RailwayProject, domain: string) {
+  const { serviceId, environmentId } = webService(project);
+  const monitorKey = createHmac("sha256", master).update("runport-app-alerts:monitor").digest("hex");
+  return createHmac("sha256", monitorKey)
+    .update(`runport-account-maintenance:${slug}:${serviceId}:${environmentId}:${domain}`).digest("hex");
 }
 
 async function setup(origin: string, keychainService: string) {
@@ -35,17 +43,13 @@ async function setup(origin: string, keychainService: string) {
   return { target, key, update };
 }
 
-export async function registerAppAlerts(slug: string, project: RailwayProject, domain: string, accountMaintenance: boolean) {
+export async function registerAppAlerts(slug: string, project: RailwayProject, domain: string) {
   const keychainService = config.keychainService;
   const { target, key, update } = await setup(process.env.PLATFORM_ALERT_ORIGIN ?? "https://admin.runport.app", keychainService);
   const service = webService(project);
-  await update(slug, "POST", { slug, ...service, domain, accountMaintenance });
+  await update(slug, "POST", { slug, ...service, domain });
   return {
     registration: { origin: target.origin, keychainService, environmentId: service.environmentId, serviceId: service.serviceId },
-    ...(accountMaintenance ? {
-      RUNPORT_ACCOUNT_MAINTENANCE_KEY: createHmac("sha256", key("monitor"))
-        .update(`runport-account-maintenance:${slug}:${service.serviceId}:${service.environmentId}:${domain}`).digest("hex"),
-    } : {}),
     RUNPORT_ERROR_URL: new URL(`/_runport/alerts/report/${slug}`, target).href,
     RUNPORT_ERROR_TOKEN: key(`report:${slug}:${service.serviceId}:${service.environmentId}`),
   };

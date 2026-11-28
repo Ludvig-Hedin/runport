@@ -1,6 +1,6 @@
-import { maintainAccounts } from "./account-maintenance";
 import { checkDeployedApps } from "./app-alert-monitor";
 import { analyticsOwnerAlert, updateIncident, type MonitorState } from "./monitor-alerts";
+import { maintainAccounts } from "./account-maintenance";
 
 // Every few minutes: is the API up, is the mail gateway up, and is last
 // night's backup there? Emails the owner when something is wrong, at most

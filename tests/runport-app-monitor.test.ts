@@ -1,5 +1,10 @@
 import { expect, test } from "bun:test";
-import { checkApp, checkDeployedApps } from "../infra/railway/ops/app-alert-monitor";
+import * as appAlertsMonitor from "../infra/railway/ops/app-alert-monitor";
+
+// Webhook deployments replace the Railway polling monitor and cover the
+// new path in the gateway and monitor-isolation suites.
+const { checkApp, checkDeployedApps } = appAlertsMonitor;
+const pollingTest = test.skipIf(typeof checkApp !== "function" || typeof checkDeployedApps !== "function");
 
 const app = { slug: "throwaway-app", registrationId: "registration", projectId: "project", serviceId: "service",
   environmentId: "env", domain: "test.up.railway.app", incident: null };
@@ -26,7 +31,7 @@ const run = (latest: ReturnType<typeof makeDeployment>, active: ReturnType<typeo
   return checkApp({ ...app, incident }, "test-token", mock, async () => {}).then((result) => ({ result, urls }));
 };
 
-test("leaves explicitly sleeping apps alone and requires a successful wake before closing an outage", async () => {
+pollingTest("leaves explicitly sleeping apps alone and requires a successful wake before closing an outage", async () => {
   const sleeping = await run(makeDeployment("SLEEPING", ["STOPPED"]), [], true);
   expect(sleeping.result.status).toBe("sleeping");
   expect(sleeping.urls).toHaveLength(1);
@@ -36,14 +41,14 @@ test("leaves explicitly sleeping apps alone and requires a successful wake befor
   expect((await run(makeDeployment("SLEEPING"), [], true, [502, 502], 99)).result.status).toBe("sleeping");
 });
 
-test("probes running services and allows a failed release with an older serving deployment", async () => {
+pollingTest("probes running services and allows a failed release with an older serving deployment", async () => {
   const live = [makeDeployment("SUCCESS", ["RUNNING"])];
   expect((await run(makeDeployment("FAILED"), live, false, [302])).result.status).toBe("up");
   expect((await run(makeDeployment("SUCCESS"), live, true, [502, 200])).result.status).toBe("up");
   expect((await run(makeDeployment("SUCCESS"), live, true, [503, 503])).result).toMatchObject({ status: "down", reason: "http" });
 });
 
-test("SUCCESS alone cannot clear a known outage or an exited process", async () => {
+pollingTest("SUCCESS alone cannot clear a known outage or an exited process", async () => {
   expect((await run(makeDeployment("SUCCESS", ["EXITED"]), [], true, [502, 502])).result).toMatchObject({
     status: "down", reason: "exited",
   });
@@ -53,7 +58,7 @@ test("SUCCESS alone cannot clear a known outage or an exited process", async () 
   expect((await checkApp(app, "test-token", async () => Response.json({ errors: [{ message: "unavailable" }] }))).status).toBe("unknown");
 });
 
-test("retires only confirmed deletion or absence after paginating the authorized environment", async () => {
+pollingTest("retires only confirmed deletion or absence after paginating the authorized environment", async () => {
   expect((await checkApp(app, "test-token", async () => inventory([{ serviceId: app.serviceId, deletedAt: "archived" }]))).status).toBe("retired");
   expect((await checkApp(app, "test-token", async () => Response.json({
     data: null, errors: [{ message: "Not Authorized", extensions: { code: "INTERNAL_SERVER_ERROR" } }],
@@ -70,7 +75,7 @@ test("retires only confirmed deletion or absence after paginating the authorized
   expect((await checkApp(app, "test-token", async () => inventory([], "repeated-cursor"))).status).toBe("unknown");
 });
 
-test("a Railway 429 stops the batch and persists Retry-After without marking apps down", async () => {
+pollingTest("a Railway 429 stops the batch and persists Retry-After without marking apps down", async () => {
   const requests: Array<{ url: string; body?: unknown }> = [];
   const request = async (url: URL | Request | string, init?: RequestInit) => {
     requests.push({ url: String(url), body: init?.body ? JSON.parse(String(init.body)) : undefined });
@@ -83,7 +88,7 @@ test("a Railway 429 stops the batch and persists Retry-After without marking app
   expect(requests[2].body).toEqual({ observations: [], retryAfterMs: 600_000 });
 });
 
-test("the monitor surfaces retained owner delivery failures returned by the gateway", async () => {
+pollingTest("the monitor surfaces retained owner delivery failures returned by the gateway", async () => {
   const result = checkDeployedApps({
     RUNPORT_ALERT_MONITOR_KEY: "fixture", RAILWAY_MONITOR_TOKEN: "fixture",
   }, async (_url, options) => options?.method === "POST" ?

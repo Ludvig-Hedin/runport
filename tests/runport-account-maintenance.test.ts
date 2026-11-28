@@ -2,6 +2,12 @@ import { expect, test } from "bun:test";
 import { maintainAccounts } from "../infra/railway/ops/account-maintenance";
 import { authorisedMaintenance } from "../templates/nextjs-appwrite/lib/account-maintenance";
 
+test("rejects manually configured maintenance keys with insufficient random material", () => {
+  for (const weak of ["short", "a".repeat(64), "0123456789abcdef".repeat(4)]) {
+    expect(authorisedMaintenance(`Bearer ${weak}`, weak)).toBe(false);
+  }
+});
+
 test("maintenance makes bounded, authenticated POSTs to all pages and never follows redirects", async () => {
   const app = { slug: "first-app", serviceId: "service-one", environmentId: "production", domain: "first.up.railway.app" };
   const valid = { ...app, slug: "last-app", domain: "last.up.railway.app" };
