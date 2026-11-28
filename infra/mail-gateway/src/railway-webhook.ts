@@ -50,12 +50,19 @@ export function railwayWebhooks(db: Database, probe: Probe, clock: () => number)
   `);
   const recordEvent = db.transaction((registrationId: string, deploymentId: string, happened: number, kind: EventKind, now: number) => {
     if (!db.query("SELECT 1 FROM apps WHERE registrationId = ?").get(registrationId)) return;
+    // Railway may remove a failed deployment before we can confirm its
+    // outage. Preserve that check and its original time until it finishes
+    // or a newer success replaces it.
     db.query(`
       INSERT INTO railway_deployments VALUES (?, ?, ?, ?, ?)
       ON CONFLICT (registrationId, deploymentId) DO UPDATE SET
         kind = CASE WHEN excluded.happened > happened THEN excluded.kind ELSE kind END,
         happened = MAX(happened, excluded.happened),
         successfulAt = NULLIF(MAX(COALESCE(successfulAt, 0), COALESCE(excluded.successfulAt, 0)), 0)
+      WHERE NOT (excluded.kind = 'removed' AND railway_deployments.kind IN ('failed', 'crashed') AND EXISTS (
+        SELECT 1 FROM railway_checks
+        WHERE registrationId = excluded.registrationId AND deploymentId = excluded.deploymentId AND pending = 1
+      ))
     `).run(registrationId, deploymentId, happened, kind, kind === "success" ? happened : null);
     // A delayed success can identify a replacement even after the previous
     // deployment's removal, without moving that deployment's own event time.

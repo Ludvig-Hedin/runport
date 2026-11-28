@@ -146,20 +146,20 @@ has no outage monitoring. Removing an app from the registry disables its
 receiver. The Railway CLI login can create and list webhook rules. Editing or
 removing an existing Railway rule requires dashboard access.
 
-Back up the gateway data before applying the rollout. Use
-`./apply.sh apply-app-alerts` to enable the pinned gateway owner address and
+Back up the gateway data before applying the rollout. Run
+`./apply.sh deploy-gateway` and `./apply.sh deploy-router` from published main.
+Use `./apply.sh apply-app-alerts` to set the pinned gateway owner address and
 the internal monitor key. The command verifies the linked project and pins
-the plan and apply to Runport production. The script derives the key from the existing gateway
-master key. Run `./apply.sh deploy-gateway`, `./apply.sh deploy-router` and
-`./apply.sh deploy-monitor` from published main. Production needs no Railway
-credential for monitoring. Once these deployed paths are healthy, backfill
-the two existing apps from a checkout linked to the intended Railway projects:
+the plan and apply to Runport production. Registration is disabled until
+the gateway has its owner address. Once the gateway is healthy, backfill the
+two existing apps from a checkout linked to the intended Railway projects:
 
 ```sh
 PLATFORM_KEYCHAIN_SERVICE=runport-prod bun mcp/src/backfill-app-alerts.ts todo auth-preview
 ```
 
-The backfill verifies the linked project and its production Railway domain,
+Then run `./apply.sh deploy-monitor` from published main. Production needs no
+Railway credential for monitoring. The backfill verifies the linked project and its production Railway domain,
 backs up the local registry, and adds the project webhooks without rebuilding
 the apps. It preserves account maintenance enrolment. When rolling out both
 features, deploy the gateway that supports both app registrations before
