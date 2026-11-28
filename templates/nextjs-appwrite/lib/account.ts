@@ -1,7 +1,13 @@
 "use server";
 
 import { AppwriteException } from "node-appwrite";
-import { createSessionClient } from "./appwrite";
+import { cookies } from "next/headers";
+import { redirect } from "next/navigation";
+import { after } from "next/server";
+import { routes } from "../runport.config";
+import { finishPendingDeletions, requestAccountDeletion } from "./account-deletion";
+import { createAdminClient, createSessionClient, sessionCookieName } from "./appwrite";
+import { setFlash } from "./flash";
 import { TOO_MANY_ATTEMPTS, friendlyError } from "./auth-errors";
 import { authMode } from "./config";
 import { allowed } from "./rate-limit";
@@ -88,4 +94,24 @@ export async function signOutDevices(sessionId?: string): Promise<AccountState> 
     return { error: friendlyError(error, "Could not sign out that device.") };
   }
   return { notice: sessionId ? "Device signed out." : "Signed out everywhere else." };
+}
+
+export async function deleteAccount(_: AccountState, form: FormData): Promise<AccountState> {
+  const user = await getUser();
+  if (!user) return SIGNED_OUT;
+  if (!(await allowed("account", user.email))) return { error: TOO_MANY_ATTEMPTS };
+  if (String(form.get("confirm") ?? "").trim().toLowerCase() !== user.email.toLowerCase()) {
+    return { error: "Type your email address exactly to confirm." };
+  }
+
+  const clients = createAdminClient();
+  const result = await requestAccountDeletion(clients, user);
+  if ("error" in result) return result;
+  after(async () => {
+    await finishPendingDeletions(clients).catch(() => console.error("Could not read the account deletion queue"));
+  });
+
+  (await cookies()).delete(sessionCookieName());
+  await setFlash(result.notice);
+  redirect(routes.afterSignOut);
 }

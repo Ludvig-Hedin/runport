@@ -35,13 +35,17 @@ async function setup(origin: string, keychainService: string) {
   return { target, key, update };
 }
 
-export async function registerAppAlerts(slug: string, project: RailwayProject, domain: string) {
+export async function registerAppAlerts(slug: string, project: RailwayProject, domain: string, accountMaintenance: boolean) {
   const keychainService = config.keychainService;
   const { target, key, update } = await setup(process.env.PLATFORM_ALERT_ORIGIN ?? "https://admin.runport.app", keychainService);
   const service = webService(project);
-  await update(slug, "POST", { slug, ...service, domain });
+  await update(slug, "POST", { slug, ...service, domain, accountMaintenance });
   return {
     registration: { origin: target.origin, keychainService, environmentId: service.environmentId, serviceId: service.serviceId },
+    ...(accountMaintenance ? {
+      RUNPORT_ACCOUNT_MAINTENANCE_KEY: createHmac("sha256", key("monitor"))
+        .update(`runport-account-maintenance:${slug}:${service.serviceId}:${service.environmentId}:${domain}`).digest("hex"),
+    } : {}),
     RUNPORT_ERROR_URL: new URL(`/_runport/alerts/report/${slug}`, target).href,
     RUNPORT_ERROR_TOKEN: key(`report:${slug}:${service.serviceId}:${service.environmentId}`),
   };

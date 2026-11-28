@@ -1,9 +1,10 @@
 // Creates the database and tables from lib/schema.ts. Safe to run again.
 // Row security is on: each row is readable and writable only by its creator.
 
-import { AppwriteException, Client, Permission, Query, Role, TablesDB, TablesDBIndexType } from "node-appwrite";
+import { AppwriteException, Client, Permission, Query, Role, TablesDB, TablesDBIndexType, Users } from "node-appwrite";
+import { finishPendingDeletions } from "../lib/account-deletion";
 import { soleOwner } from "../lib/ownership";
-import { DATABASE_ID, OWNER_COLUMN, TABLES, type ColumnSpec } from "../lib/schema";
+import { DATABASE_ID, DELETIONS_TABLE, OWNER_COLUMN, TABLES, type ColumnSpec } from "../lib/schema";
 
 function env(name: string): string {
   const value = process.env[name];
@@ -113,9 +114,14 @@ async function main(): Promise<void> {
         console.log(`created column ${table.id}.${column.key}`);
       }
     }
+    if (table.id === DELETIONS_TABLE) {
+      for (const column of table.columns) await waitForColumn(table.id, column.key);
+    }
     if (table.personal) await ensureOwner(table.id);
   }
 
+  const { failed } = await finishPendingDeletions({ tables, users: new Users(client) });
+  if (failed) console.warn("Some account deletions are pending. The next maintenance run will retry.");
   console.log("setup done");
 }
 

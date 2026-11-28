@@ -41,7 +41,8 @@ function fixture({ total = 100, alertPerApp = 10, recipient = owner, delivery }:
     headers: { Authorization: "Bearer " + token, "Content-Type": "application/json" },
     body: body === undefined ? undefined : JSON.stringify(body),
   }));
-  const register = (app = slug) => request("/_runport/alerts/register/" + app, registrationKey(master), { ...deployment, slug: app });
+  const register = (app = slug, accountMaintenance?: boolean) =>
+    request("/_runport/alerts/register/" + app, registrationKey(master), { ...deployment, slug: app, accountMaintenance });
   const report = (event: unknown = error, app = slug) =>
     request("/_runport/alerts/report/" + app, appKey(app), event);
   const list = () => request("/internal/app-alerts", monitorKey(master));
@@ -331,4 +332,22 @@ test("a recovery waits for its outage alert to be delivered", async () => {
   expect(f.inbox).toHaveLength(2);
   expect(f.inbox[0].raw).toContain("Appen ligger nere");
   expect(f.inbox[1].raw).toContain("Appen fungerar igen");
+});
+
+test("account maintenance enumerates every registration during a Railway alerts backoff", async () => {
+  const f = fixture();
+  await f.register("first-old-app");
+  for (let i = 0; i < 21; i++) await f.register(`fixture-${String(i).padStart(2, "0")}`, true);
+  await f.poll([], hour);
+  expect((await (await f.list()).json()).apps).toEqual([]);
+  const list = (after: string, key = monitorKey(master)) =>
+    f.request("/internal/app-alerts?accountMaintenanceAfter=" + after, key);
+  expect((await list("", registrationKey(master))).status).toBe(401);
+  const first = await (await list("")).json();
+  expect(first.apps).toHaveLength(20);
+  expect(first.next).toBe("fixture-19");
+  const last = await (await list(first.next)).json();
+  expect(last.apps.map(({ slug }: { slug: string }) => slug)).toEqual(["fixture-20"]);
+  expect(last.next).toBeNull();
+  expect(f.inbox).toHaveLength(0);
 });

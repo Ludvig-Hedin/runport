@@ -1,4 +1,5 @@
 import { NextResponse, type NextRequest } from "next/server";
+import { ACCOUNT_MAINTENANCE_PATH, authorisedMaintenance } from "@/lib/account-maintenance";
 import { indexingAllowed, sitePassword } from "@/lib/config";
 import { safeEqual, unlockCookieName, unlockToken } from "@/lib/site-lock";
 
@@ -25,6 +26,10 @@ function withRobots(response: NextResponse): NextResponse {
 export async function proxy(request: NextRequest) {
   const password = sitePassword();
   const { pathname, search } = request.nextUrl;
+  if (pathname === ACCOUNT_MAINTENANCE_PATH && request.method === "POST"
+    && !request.headers.has("next-action") && authorisedMaintenance(request.headers.get("authorization"))) {
+    return withRobots(NextResponse.next());
+  }
   const locked = password ? !(await isUnlocked(request, password)) : false;
   // Server actions can be posted to any path, the open ones included, with or
   // without a Next-Action header (plain forms carry the action in the body).

@@ -98,12 +98,20 @@ const { RUNPORT_FORM_MAIL_TOKEN, ...formMail } = await formMailSettings(slug, ma
 const analytics = await provisionAppAnalytics(app.folder, slug, domain);
 const { ANALYTICS_INGEST_TOKEN: ingestToken, ...analyticsPublicVars } = analytics.variables;
 const vars = { ...formMail, APPWRITE_ENDPOINT: config.endpoint, APPWRITE_PROJECT_ID: slug, APP_URL: `https://${domain}`, PORT: String(app.port), NEXT_TELEMETRY_DISABLED: "1", ...analyticsPublicVars };
-const alertVars = await registerAppAlerts(slug, project, domain);
+const accountMaintenance = await Bun.file(join(app.folder, "app", "api", "runport", "account-maintenance", "route.ts")).exists();
+const alertVars = await registerAppAlerts(slug, project, domain, accountMaintenance);
 await upsertApp({ ...app, alerts: alertVars.registration });
 const variableTarget = ["--service", "web", "--environment", "production", "--skip-deploys"];
 await railway(["variables", ...variableTarget, ...Object.entries({ ...vars, RUNPORT_ERROR_URL: alertVars.RUNPORT_ERROR_URL })
   .flatMap(([k, v]) => ["--set", `${k}=${v}`])], undefined, true);
-for (const [name, value] of Object.entries({ APPWRITE_API_KEY: key, RUNPORT_FORM_MAIL_TOKEN, RUNPORT_ERROR_TOKEN: alertVars.RUNPORT_ERROR_TOKEN })) {
+for (const [name, value] of Object.entries({
+  APPWRITE_API_KEY: key,
+  RUNPORT_FORM_MAIL_TOKEN,
+  RUNPORT_ERROR_TOKEN: alertVars.RUNPORT_ERROR_TOKEN,
+  ...(alertVars.RUNPORT_ACCOUNT_MAINTENANCE_KEY ? {
+    RUNPORT_ACCOUNT_MAINTENANCE_KEY: alertVars.RUNPORT_ACCOUNT_MAINTENANCE_KEY,
+  } : {}),
+})) {
   await railway(["variable", "set", ...variableTarget, "--stdin", name], value, true);
 }
 if (ingestToken) {

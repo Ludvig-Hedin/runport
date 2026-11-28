@@ -170,6 +170,18 @@ client component using `import { track } from "@/lib/analytics"`. First add
 `"filter-applied": { filter: ["open", "all"] }` to `events` in that policy.
 Unknown event names, fields, and values are discarded.
 
+## Account deletion
+
+People can close their account from the account page. Runport resumes
+unfinished deletions every five minutes on deployed apps. For a deployment
+outside Runport, set a server-only `RUNPORT_ACCOUNT_MAINTENANCE_KEY` and have
+the scheduler send authenticated POSTs to `/api/runport/account-maintenance`.
+Run `bun run setup` to create the queue and resume unfinished work.
+
+Add a table to `lib/schema.ts` with `personal: true` when its rows should
+be considered for deletion. A row is eligible only when its owner column
+and all its permission roles name the person closing the account.
+
 ## Appwrite MCP
 
 If `.mcp.json` exists, the Appwrite MCP server is scoped to this app's project

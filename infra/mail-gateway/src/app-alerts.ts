@@ -33,7 +33,7 @@ export const reportKey = (master: string, slug: string, serviceId: string, envir
 export const registrationKey = (master: string) => key(master, "register");
 export const monitorKey = (master: string) => key(master, "monitor");
 
-type Registration = { slug: string; projectId: string; environmentId: string; serviceId: string; domain: string };
+type Registration = { slug: string; projectId: string; environmentId: string; serviceId: string; domain: string; accountMaintenance: boolean };
 type Deployment = Registration & { registrationId: string; incident: number | null; lastIncident: number | null };
 type Report = { source: string; kind: string; fingerprint: string };
 type Observation = { slug: string; registrationId: string; serviceId: string; environmentId: string; status: string; reason: string };
@@ -76,12 +76,13 @@ const record = (value: unknown): value is Record<string, unknown> =>
 
 function registration(value: unknown, slug: string): Registration | undefined {
   if (!record(value) || value.slug !== slug) return;
-  const { projectId, environmentId, serviceId, domain } = value;
+  const { projectId, environmentId, serviceId, domain, accountMaintenance } = value;
   if (typeof projectId !== "string" || !UUID.test(projectId) ||
     typeof environmentId !== "string" || !UUID.test(environmentId) ||
     typeof serviceId !== "string" || !UUID.test(serviceId) ||
     typeof domain !== "string" || !/^[a-z0-9][a-z0-9-]{0,62}\.up\.railway\.app$/.test(domain)) return;
-  return { slug, projectId, environmentId, serviceId, domain };
+  if (accountMaintenance !== undefined && typeof accountMaintenance !== "boolean") return;
+  return { slug, projectId, environmentId, serviceId, domain, accountMaintenance: accountMaintenance === true };
 }
 
 function errorReport(value: unknown): Report | undefined {
@@ -114,7 +115,8 @@ export function createAppAlerts({ path, master, owner, limits, deliver, log, clo
   db.run(`
     CREATE TABLE IF NOT EXISTS apps (
       slug TEXT PRIMARY KEY, projectId TEXT NOT NULL, environmentId TEXT NOT NULL, serviceId TEXT NOT NULL,
-      domain TEXT NOT NULL, incident INTEGER, lastIncident INTEGER, registrationId TEXT NOT NULL
+      domain TEXT NOT NULL, incident INTEGER, lastIncident INTEGER, registrationId TEXT NOT NULL,
+      accountMaintenance INTEGER NOT NULL DEFAULT 0
     );
     CREATE TABLE IF NOT EXISTS alerts (
       id TEXT PRIMARY KEY, slug TEXT NOT NULL, category TEXT NOT NULL, detail TEXT NOT NULL,
@@ -138,6 +140,9 @@ export function createAppAlerts({ path, master, owner, limits, deliver, log, clo
       db.query<{ name: string }, []>(`PRAGMA table_info(${table})`).all().map((entry) => entry.name),
     );
     const appColumns = names("apps");
+    if (!appColumns.has("accountMaintenance")) {
+      db.run("ALTER TABLE apps ADD COLUMN accountMaintenance INTEGER NOT NULL DEFAULT 0");
+    }
     if (!appColumns.has("lastIncident")) db.run("ALTER TABLE apps ADD COLUMN lastIncident INTEGER");
     if (!appColumns.has("registrationId")) {
       db.run("ALTER TABLE apps ADD COLUMN registrationId TEXT NOT NULL DEFAULT ''");
@@ -333,11 +338,23 @@ export function createAppAlerts({ path, master, owner, limits, deliver, log, clo
   }
 
   return async (request: Request): Promise<Response> => {
-    const path = new URL(request.url).pathname;
+    const url = new URL(request.url);
+    const path = url.pathname;
     if (path === "/internal/app-alerts") {
       if (!authenticated(request, monitorKey(master))) return status(401);
       const now = clock();
       if (request.method === "GET") {
+        const maintenanceAfter = url.searchParams.get("accountMaintenanceAfter");
+        if (maintenanceAfter !== null) {
+          if (maintenanceAfter && !/^[a-z][a-z0-9-]{1,35}$/.test(maintenanceAfter)) return status(400);
+          // Maintenance needs its own traversal even when the Railway
+          // alert checks are backing off. Reading it sends no alerts.
+          const rows = db.query<Pick<Registration, "slug" | "serviceId" | "environmentId" | "domain">, [string]>(`
+            SELECT slug, serviceId, environmentId, domain FROM apps WHERE accountMaintenance = 1 AND slug > ? ORDER BY slug LIMIT 21
+          `).all(maintenanceAfter);
+          const apps = rows.slice(0, 20);
+          return Response.json({ apps, next: rows.length > 20 ? apps[19].slug : null });
+        }
         const cursor = db.query<{ cursor: string; waitUntil: number }, []>("SELECT cursor, waitUntil FROM monitor_cursor WHERE id = 1").get()!;
         if (cursor.waitUntil > now) return Response.json({ apps: [] });
         const page = db.query(`
@@ -392,14 +409,15 @@ export function createAppAlerts({ path, master, owner, limits, deliver, log, clo
       const app = registration(input, slug);
       if (!app) return status(400);
       db.query(`
-        INSERT INTO apps (slug, projectId, environmentId, serviceId, domain, registrationId) VALUES (?, ?, ?, ?, ?, ?)
+        INSERT INTO apps (slug, projectId, environmentId, serviceId, domain, registrationId, accountMaintenance)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT (slug) DO UPDATE SET projectId = excluded.projectId, environmentId = excluded.environmentId,
-        serviceId = excluded.serviceId, domain = excluded.domain,
+        serviceId = excluded.serviceId, domain = excluded.domain, accountMaintenance = excluded.accountMaintenance,
         incident = CASE WHEN serviceId = excluded.serviceId AND environmentId = excluded.environmentId AND projectId = excluded.projectId THEN incident ELSE NULL END,
         lastIncident = CASE WHEN serviceId = excluded.serviceId AND environmentId = excluded.environmentId AND projectId = excluded.projectId THEN lastIncident ELSE NULL END,
         registrationId = CASE WHEN serviceId = excluded.serviceId AND environmentId = excluded.environmentId AND projectId = excluded.projectId
           THEN registrationId ELSE excluded.registrationId END
-      `).run(slug, app.projectId, app.environmentId, app.serviceId, app.domain, crypto.randomUUID());
+      `).run(slug, app.projectId, app.environmentId, app.serviceId, app.domain, crypto.randomUUID(), Number(app.accountMaintenance));
       return status(204);
     }
     const event = errorReport(input);

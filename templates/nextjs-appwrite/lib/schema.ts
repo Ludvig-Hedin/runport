@@ -2,6 +2,7 @@
 // existing tables and data alone. Add a table here, then run setup again.
 
 export const DATABASE_ID = "main";
+export const DELETIONS_TABLE = "account_deletions";
 export const FORM_SUBMISSIONS_TABLE = "form_submissions";
 
 export type ColumnSpec =
@@ -25,6 +26,15 @@ export type TableSpec = {
 export const OWNER_COLUMN = "owner";
 
 export const TABLES: TableSpec[] = [
+  {
+    id: DELETIONS_TABLE,
+    name: "Account deletions",
+    serverOnly: true,
+    columns: [
+      { type: "varchar", key: "userId", size: 36, required: true },
+      { type: "varchar", key: "userCreatedAt", size: 64, required: true },
+    ],
+  },
   {
     id: FORM_SUBMISSIONS_TABLE,
     name: "Form submissions",
