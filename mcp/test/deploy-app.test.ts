@@ -5,10 +5,11 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { websiteId } from "../src/analytics";
 
-test.each(["deploy", "backfill"] as const)("%s registers app alerts with the expected scope", async (operation) => {
+test.each(["deploy", "backfill", "wrong-project", "wrong-environment", "missing-pins"] as const)("%s only registers the intended app alerts", async (operation) => {
   const root = await mkdtemp(join(tmpdir(), "runport-deploy-fixture-"));
   try {
-    const slug = operation === "backfill" ? "todo" : "fixture-app";
+    const backfill = operation !== "deploy";
+    const slug = backfill ? "todo" : "fixture-app";
     const domain = "fixture.up.railway.app";
     const folder = join(root, slug);
     const bin = join(root, "bin");
@@ -42,10 +43,10 @@ test.each(["deploy", "backfill"] as const)("%s registers app alerts with the exp
       await mkdir(dirname(file), { recursive: true });
       await writeFile(file, data);
     }
-    const initialRegistry = JSON.stringify({ ...(operation === "backfill" ? { registryPeerField: "kept" } : {}),
+    const initialRegistry = JSON.stringify({ ...(backfill ? { registryPeerField: "kept" } : {}),
       apps: [{ slug, name: "Deployment fixture", projectId: slug, folder, port: 3101,
       git: "github", repoUrl: null, createdByPlatform: true, createdAt: "2026-11-27T00:00:00Z",
-      ...(operation === "backfill" ? { peerField: "kept", alerts: { accountMaintenance: true, peerField: "kept" } } : {}),
+      ...(backfill ? { peerField: "kept", alerts: { accountMaintenance: true, peerField: "kept" } } : {}),
     }] });
     await writeFile(registry, initialRegistry);
     await writeFile(join(root, "registry.backup.json"), initialRegistry);
@@ -103,8 +104,11 @@ globalThis.fetch = async (input, options) => {
   throw new Error("Network access outside the isolated deploy fixture: " + url.href);
 };
 `);
-    const script = operation === "backfill" ? "backfill-app-alerts.ts" : "deploy-app.ts";
-    const proc = Bun.spawn([process.execPath, "--preload", preload, join(import.meta.dir, "../src", script), slug], {
+    const script = backfill ? "backfill-app-alerts.ts" : "deploy-app.ts";
+    const pinnedProject = operation === "wrong-project" ? workspaceId : projectId;
+    const pinnedEnvironment = operation === "wrong-environment" ? workspaceId : environmentId;
+    const arg = backfill && operation !== "missing-pins" ? `${slug}:${pinnedProject}:${pinnedEnvironment}` : slug;
+    const proc = Bun.spawn([process.execPath, "--preload", preload, join(import.meta.dir, "../src", script), arg], {
       cwd: root,
       env: {
         PATH: [bin, dirname(process.execPath), "/usr/bin", "/bin"].join(":"),
@@ -117,6 +121,15 @@ globalThis.fetch = async (input, options) => {
       stdout: "pipe", stderr: "pipe",
     });
     const [out, err, exit] = await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text(), proc.exited]);
+    if (backfill && operation !== "backfill") {
+      expect(exit).not.toBe(0);
+      expect(err).toContain(operation === "missing-pins" ? "Expected slug:project-id:environment-id" : "Railway target mismatch for todo");
+      const calls = await readFile(events, "utf8").catch(() => "");
+      expect(calls).not.toContain('"url"');
+      expect(await readFile(registry, "utf8")).toBe(initialRegistry);
+      expect((await readdir(root)).some(name => name.startsWith(".platform.json.alerts-backup-"))).toBe(false);
+      return;
+    }
     if (exit !== 0) throw new Error(out + err);
     const calls = (await readFile(events, "utf8")).trim().split("\n").map(line => JSON.parse(line));
     if (operation === "backfill") {

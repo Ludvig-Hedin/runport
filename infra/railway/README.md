@@ -152,10 +152,13 @@ Use `./apply.sh apply-app-alerts` to set the pinned gateway owner address and
 the internal monitor key. The command verifies the linked project and pins
 the plan and apply to Runport production. Registration is disabled until
 the gateway has its owner address. Once the gateway is healthy, backfill the
-two existing apps from a checkout linked to the intended Railway projects:
+two existing apps from their linked Railway projects. Supply the independently
+verified project and production environment IDs for each app:
 
 ```sh
-PLATFORM_KEYCHAIN_SERVICE=runport-prod bun mcp/src/backfill-app-alerts.ts todo auth-preview
+PLATFORM_KEYCHAIN_SERVICE=runport-prod bun mcp/src/backfill-app-alerts.ts \
+  "todo:${TODO_PROJECT_ID}:${TODO_PRODUCTION_ENVIRONMENT_ID}" \
+  "auth-preview:${AUTH_PREVIEW_PROJECT_ID}:${AUTH_PREVIEW_PRODUCTION_ENVIRONMENT_ID}"
 ```
 
 Then run `./apply.sh deploy-monitor` from published main. Production needs no
