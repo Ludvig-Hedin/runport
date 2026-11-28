@@ -129,12 +129,15 @@ when a slug is reused.
 
 `deploy-app` installs a project webhook with the local Railway CLI login.
 Railway authenticates deliveries with a write-only header derived for that
-app, project, environment and service. The gateway checks all four and
-stores only event state. Railway delivery is best effort and may be out of
+app, project, environment, service and registration. Redeploys reuse an
+existing registration. Retiring an app and registering it again rotates
+the header and the webhook binding. The gateway stores only event state.
+Railway delivery is best effort and may be out of
 order. [Railway webhooks](https://docs.railway.com/observability/webhooks)
 
-A crash, failed deployment or removal prompts a public health check with a
-second attempt for cold starts. The gateway ignores sleep events and removals
+A crash, failed deployment or removal queues a public health check. The
+gateway confirms an unsuccessful probe after at least a minute before opening
+an incident. It ignores sleep events and removals
 of superseded deployments. A deployment or restart can close an incident
 after the app responds. The five-minute monitor processes pending checks and
 delivers queued owner mail independently of platform checks. Each outage
@@ -145,7 +148,8 @@ removing an existing Railway rule requires dashboard access.
 
 Back up the gateway data before applying the rollout. Use
 `./apply.sh apply-app-alerts` to enable the pinned gateway owner address and
-the internal monitor key. The script derives the key from the existing gateway
+the internal monitor key. The command verifies the linked project and pins
+the plan and apply to Runport production. The script derives the key from the existing gateway
 master key. Run `./apply.sh deploy-gateway`, `./apply.sh deploy-router` and
 `./apply.sh deploy-monitor` from published main. Production needs no Railway
 credential for monitoring. Once these deployed paths are healthy, backfill

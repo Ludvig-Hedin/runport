@@ -65,6 +65,16 @@ export function assertAnalyticsPlan(plan: unknown, requireNoop = false): void {
   }
 }
 
+const productionProject = "c93df5f9-ac8b-453d-815a-e9fedd991ca1";
+const productionEnvironment = "d95ac74a-26dc-4738-8765-3ab1389e057f";
+
+export function assertAppAlertsTarget(status: unknown): void {
+  const target = status as { id?: string; environments?: { edges?: { node?: { id?: string; name?: string } }[] } } | null;
+  if (target?.id !== productionProject || !target.environments?.edges?.some(
+    ({ node }) => node?.id === productionEnvironment && node.name === "production",
+  )) throw new Error("App alerts require the Runport production project and environment.");
+}
+
 export function assertAppAlertsPlan(plan: unknown, requireNoop = false, storageOnly = false): void {
   const { kind, version, destructive, claim, changeSet, environmentId } = (plan ?? {}) as {
     kind?: unknown; version?: unknown; destructive?: unknown; claim?: unknown;
@@ -74,8 +84,8 @@ export function assertAppAlertsPlan(plan: unknown, requireNoop = false, storageO
       (claim !== undefined && claim !== false) || !Array.isArray(changeSet?.changes)) {
     throw new Error("App alerts plan is destructive, claims resources, or uses an unrecognized format.");
   }
-  if (storageOnly && environmentId !== "d95ac74a-26dc-4738-8765-3ab1389e057f") {
-    throw new Error("Mail storage apply is pinned to the Runport production environment.");
+  if (environmentId !== productionEnvironment) {
+    throw new Error("The plan must target the Runport production environment.");
   }
   if (storageOnly && changeSet.changes.length > 1) {
     throw new Error("Mail storage apply allows only the gateway volume attachment.");

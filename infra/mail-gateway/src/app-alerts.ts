@@ -170,7 +170,7 @@ export function createAppAlerts({ path, master, owner, limits, deliver, log, clo
     db.run("CREATE INDEX IF NOT EXISTS alerts_registration ON alerts(registrationId, channel, day)");
     db.run("CREATE INDEX IF NOT EXISTS alerts_due ON alerts(state, due)");
   })();
-  const webhooks = railwayWebhooks(db, probe);
+  const webhooks = railwayWebhooks(db, probe, clock);
 
   const intake = db.query<{ count: number }, [string, string, number, number]>(`
     INSERT INTO traffic VALUES (?, ?, ?, 1)
@@ -391,11 +391,10 @@ export function createAppAlerts({ path, master, owner, limits, deliver, log, clo
     if (request.method !== "POST" && !retiring) return status(405);
     if (action === "railway") {
       const app = db.query<Deployment, [string]>("SELECT * FROM apps WHERE slug = ?").get(slug);
-      if (!app || !authenticated(request, key(master, `railway:${slug}:${app.projectId}:${app.environmentId}:${app.serviceId}`))) return status(401);
+      if (!app || !authenticated(request, key(master, `railway:${slug}:${app.projectId}:${app.environmentId}:${app.serviceId}:${app.registrationId}`))) return status(401);
       const payload = await boundedJson(request, 24_000).catch(() => undefined);
       if (!record(payload)) return status(400);
-      const now = clock();
-      if (webhooks.receive(app, payload, now)) await webhooks.process(now, observe, app.registrationId);
+      webhooks.receive(app, payload, clock());
       return status(204);
     }
     const reportingApp = action === "report" ? db.query<Deployment, [string]>("SELECT * FROM apps WHERE slug = ?").get(slug) : null;
@@ -405,15 +404,17 @@ export function createAppAlerts({ path, master, owner, limits, deliver, log, clo
     const input = await boundedJson(request, 512).catch(() => undefined);
     if (retiring) {
       if (!record(input) || typeof input.serviceId !== "string" || !UUID.test(input.serviceId) ||
-        typeof input.environmentId !== "string" || !UUID.test(input.environmentId)) return status(400);
+        typeof input.environmentId !== "string" || !UUID.test(input.environmentId) ||
+        (input.registrationId !== undefined && (typeof input.registrationId !== "string" || !UUID.test(input.registrationId)))) return status(400);
       const existing = db.query<Deployment, [string]>("SELECT * FROM apps WHERE slug = ?").get(slug);
-      if (existing && existing.serviceId === input.serviceId && existing.environmentId === input.environmentId) retire(existing);
+      if (existing && existing.serviceId === input.serviceId && existing.environmentId === input.environmentId &&
+          (input.registrationId === undefined || existing.registrationId === input.registrationId)) retire(existing);
       return status(204);
     }
     if (action === "register") {
       const app = registration(input, slug);
       if (!app) return status(400);
-      db.query(`
+      const stored = db.query<{ registrationId: string }, [string, string, string, string, string, string, number]>(`
         INSERT INTO apps (slug, projectId, environmentId, serviceId, domain, registrationId, registeredAt) VALUES (?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT (slug) DO UPDATE SET projectId = excluded.projectId, environmentId = excluded.environmentId,
         serviceId = excluded.serviceId, domain = excluded.domain,
@@ -423,8 +424,9 @@ export function createAppAlerts({ path, master, owner, limits, deliver, log, clo
           THEN registeredAt ELSE excluded.registeredAt END,
         registrationId = CASE WHEN serviceId = excluded.serviceId AND environmentId = excluded.environmentId AND projectId = excluded.projectId
           THEN registrationId ELSE excluded.registrationId END
-      `).run(slug, app.projectId, app.environmentId, app.serviceId, app.domain, crypto.randomUUID(), clock());
-      return status(204);
+        RETURNING registrationId
+      `).get(slug, app.projectId, app.environmentId, app.serviceId, app.domain, crypto.randomUUID(), clock())!;
+      return new Response(null, { status: 204, headers: { "X-Runport-Registration-Id": stored.registrationId } });
     }
     const event = errorReport(input);
     return status(event && reportingApp ? report.immediate(reportingApp, event, clock()) : 400);

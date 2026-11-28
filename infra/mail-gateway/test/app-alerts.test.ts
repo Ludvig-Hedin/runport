@@ -63,40 +63,126 @@ function fixture({ total = 100, alertPerApp = 10, recipient = owner, delivery, p
 }
 
 const railwayDeploymentId = "00000000-0000-0000-0000-000000000004";
-const railwayKey = (app = slug) => createHmac("sha256", master)
-  .update(`runport-app-alerts:railway:${app}:${deployment.projectId}:${deployment.environmentId}:${deployment.serviceId}`).digest("hex");
+const railwayKey = (generation: string, app = slug) => createHmac("sha256", master)
+  .update(`runport-app-alerts:railway:${app}:${deployment.projectId}:${deployment.environmentId}:${deployment.serviceId}:${generation}`).digest("hex");
 const railwayEvent = (type: string, time: number, id = railwayDeploymentId) => ({
   type, timestamp: new Date(time).toISOString(), details: { id, commitMessage: "private fixture metadata" },
   resource: { project: { id: deployment.projectId }, environment: { id: deployment.environmentId },
     service: { id: deployment.serviceId }, deployment: { id } },
 });
 
+const generation = async (response: Response) => {
+  const id = response.headers.get("X-Runport-Registration-Id");
+  expect(id).toBeString();
+  return id!;
+};
+const grace = 60_000;
+
+test("retiring and re-registering rotates the Railway receiver while retries reuse it", async () => {
+  const f = fixture();
+  const old = await generation(await f.register());
+  expect(await generation(await f.register())).toBe(old);
+  await f.request("/_runport/alerts/register/" + slug, registrationKey(master), deployment, "DELETE");
+  const replacement = await generation(await f.register());
+  expect(replacement).not.toBe(old);
+  await f.request("/_runport/alerts/register/" + slug, registrationKey(master),
+    { ...deployment, registrationId: old }, "DELETE");
+  const event = railwayEvent("Deployment.sleeping", f.clock());
+  const path = "/_runport/alerts/railway/" + slug;
+  expect((await f.request(path, railwayKey(old), event)).status).toBe(401);
+  expect((await f.request(path, railwayKey(replacement), event)).status).toBe(204);
+});
+
+test("a delayed B deployment still supersedes A and a later removal of B alerts", async () => {
+  let healthy = true;
+  const f = fixture({ probe: async () => healthy });
+  const id = await generation(await f.register());
+  const path = "/_runport/alerts/railway/" + slug;
+  const a = railwayDeploymentId;
+  const b = "00000000-0000-0000-0000-000000000009";
+  const push = (type: string, time: number, deployment: string) =>
+    f.request(path, railwayKey(id), railwayEvent(type, time, deployment));
+  const start = f.clock();
+  await push("Deployment.deployed", start, a);
+  f.tick(3000);
+  await push("Deployment.removed", start + 3000, a);
+  await push("Deployment.deployed", start + 2000, b);
+  await f.maintenance();
+  expect(f.inbox).toHaveLength(0);
+  healthy = false;
+  f.tick(1000);
+  await push("Deployment.removed", f.clock(), b);
+  await f.maintenance();
+  expect(f.inbox).toHaveLength(0);
+  f.tick(grace);
+  await f.maintenance();
+  expect(f.inbox.map(({ to }) => to)).toEqual([[owner]]);
+});
+
+test("webhook probes wait for maintenance and recheck an app that wakes during the grace period", async () => {
+  let healthy = false;
+  let probes = 0;
+  const f = fixture({ probe: async () => { probes++; return healthy; } });
+  const id = await generation(await f.register());
+  await f.request("/_runport/alerts/railway/" + slug, railwayKey(id), railwayEvent("Deployment.failed", f.clock()));
+  expect(probes).toBe(0);
+  await f.maintenance();
+  expect(probes).toBe(1);
+  expect(f.inbox).toHaveLength(0);
+  healthy = true;
+  f.tick(grace);
+  await f.maintenance();
+  expect(probes).toBe(2);
+  expect(f.inbox).toHaveLength(0);
+});
+
+test("concurrent maintenance requests share a bounded Railway probe batch", async () => {
+  let calls = 0;
+  let active = 0;
+  let peak = 0;
+  const f = fixture({ probe: async () => {
+    calls++;
+    peak = Math.max(peak, ++active);
+    await Bun.sleep(10);
+    active--;
+    return true;
+  } });
+  for (const app of ["railway-a", "railway-b", "railway-c", "railway-d", "railway-e"]) {
+    const id = await generation(await f.register(app));
+    await f.request("/_runport/alerts/railway/" + app, railwayKey(id, app), railwayEvent("Deployment.deployed", f.clock()));
+  }
+  expect(calls).toBe(0);
+  await Promise.all([f.maintenance(), f.maintenance()]);
+  expect(calls).toBe(5);
+  expect(peak).toBe(4);
+});
+
 test("Railway webhooks bind the secret to the registered app and all Railway IDs", async () => {
   let probes = 0;
   const f = fixture({ probe: async () => { probes++; return false; } });
-  await f.register();
-  await f.register("other-app");
+  const id = await generation(await f.register());
+  const other = await generation(await f.register("other-app"));
   const event = railwayEvent("Deployment.crashed", f.clock());
   const route = "/_runport/alerts/railway/" + slug;
-  expect((await f.request(route, railwayKey("other-app"), event)).status).toBe(401);
+  expect((await f.request(route, railwayKey(other, "other-app"), event)).status).toBe(401);
   for (const key of ["project", "environment", "service"] as const) {
     const wrong = { ...event, resource: { ...event.resource, [key]: { id: railwayDeploymentId } } };
-    expect((await f.request(route, railwayKey(), wrong)).status).toBe(204);
+    expect((await f.request(route, railwayKey(id), wrong)).status).toBe(204);
   }
   const response = await f.maintenance();
   expect(response.status).toBe(204);
   expect(await response.text()).toBe("");
   expect(probes).toBe(0);
   expect(f.inbox).toHaveLength(0);
-  expect(JSON.stringify(f.logs)).not.toContain(railwayKey());
+  expect(JSON.stringify(f.logs)).not.toContain(railwayKey(id));
 });
 
 test("Railway duplicates and sleeping do not alert, and recovery needs a healthy public app", async () => {
   let healthy = false;
   const f = fixture({ probe: async () => healthy });
-  await f.register();
-  const push = (type: string, time = f.clock(), id?: string) =>
-    f.request("/_runport/alerts/railway/" + slug, railwayKey(), railwayEvent(type, time, id));
+  const id = await generation(await f.register());
+  const push = (type: string, time = f.clock(), deploymentId?: string) =>
+    f.request("/_runport/alerts/railway/" + slug, railwayKey(id), railwayEvent(type, time, deploymentId));
   await push("Deployment.sleeping");
   await f.maintenance();
   expect(f.inbox).toHaveLength(0);
@@ -105,6 +191,7 @@ test("Railway duplicates and sleeping do not alert, and recovery needs a healthy
   await push("Deployment.crashed", failureTime);
   await push("Deployment.crashed", failureTime);
   await f.maintenance();
+  f.tick(grace);
   await f.maintenance();
   expect(f.inbox.map(({ to }) => to)).toEqual([[owner]]);
   f.tick(1000);
@@ -120,28 +207,32 @@ test("Railway duplicates and sleeping do not alert, and recovery needs a healthy
   expect(f.inbox[1].raw).toContain("Appen svarar igen");
   const captured = JSON.stringify([f.inbox, f.logs]);
   expect(captured).not.toContain("private fixture metadata");
-  expect(captured).not.toContain(railwayKey());
+  expect(captured).not.toContain(railwayKey(id));
 });
 
 test("Railway does not confuse a replaced deployment with an outage", async () => {
   let reachable = true;
   let probes = 0;
   const f = fixture({ probe: async () => { probes++; return reachable; } });
-  await f.register();
+  const id = await generation(await f.register());
   const path = "/_runport/alerts/railway/" + slug;
   const latest = "00000000-0000-0000-0000-000000000006";
-  await f.request(path, railwayKey(), railwayEvent("Deployment.deployed", f.clock(), latest));
+  await f.request(path, railwayKey(id), railwayEvent("Deployment.deployed", f.clock(), latest));
+  await f.maintenance();
   f.tick(1000);
   reachable = false;
-  await f.request(path, railwayKey(), railwayEvent("Deployment.removed", f.clock()));
+  await f.request(path, railwayKey(id), railwayEvent("Deployment.removed", f.clock()));
   await f.maintenance();
   expect(probes).toBe(1);
   expect(f.inbox).toHaveLength(0);
   f.tick(1000);
-  await f.request(path, railwayKey(), railwayEvent("Deployment.removed", f.clock(), latest));
+  await f.request(path, railwayKey(id), railwayEvent("Deployment.removed", f.clock(), latest));
+  await f.maintenance();
+  f.tick(grace);
+  await f.maintenance();
   f.tick(1000);
   reachable = true;
-  await f.request(path, railwayKey(), railwayEvent("Deployment.restarted", f.clock(), latest));
+  await f.request(path, railwayKey(id), railwayEvent("Deployment.restarted", f.clock(), latest));
   await f.maintenance();
   expect(f.inbox.map(({ to }) => to)).toEqual([[owner], [owner]]);
 });

@@ -19,7 +19,7 @@ export type AppRecord = {
   git: GitHost;
   setupPending?: true;
   createdAt: string;
-  alerts?: { origin: string; keychainService: string; environmentId: string; serviceId: string; webhook?: RailwayWebhook };
+  alerts?: { origin: string; keychainService: string; environmentId: string; serviceId: string; registrationId?: string; webhook?: RailwayWebhook };
 };
 
 type Registry = { apps: AppRecord[] };

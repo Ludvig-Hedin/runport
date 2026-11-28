@@ -20,6 +20,7 @@ test("deploy-app provisions analytics and alerts before deploying the app", asyn
     const environmentId = "00000000-0000-0000-0000-000000000002";
     const serviceId = "00000000-0000-0000-0000-000000000003";
     const workspaceId = "00000000-0000-0000-0000-000000000004";
+    const registrationId = "00000000-0000-0000-0000-000000000006";
     const webhookId = "00000000-0000-0000-0000-000000000005";
     const project = {
       id: projectId, workspaceId,
@@ -94,7 +95,7 @@ globalThis.fetch = async (input, options) => {
   if (url.href === "https://analytics.example.test/api/websites" && method === "POST")
     return Response.json({ id: body.id, domain: body.domain });
   if (url.href === "https://alerts.example.test/_runport/alerts/register/${slug}" && method === "POST")
-    return new Response(null, { status: 204 });
+    return new Response(null, { status: 204, headers: { "X-Runport-Registration-Id": "${registrationId}" } });
   throw new Error("Network access outside the isolated deploy fixture: " + url.href);
 };
 `);
@@ -124,8 +125,8 @@ globalThis.fetch = async (input, options) => {
     expect(deploy).toBeGreaterThan(webhook);
     expect(calls[analytics].body).toMatchObject({ id: siteId, domain });
     expect(calls[registration].body).toEqual({ slug, projectId, environmentId, serviceId, domain });
-    const webhookSecret = createHmac("sha256", master).update(`runport-app-alerts:railway:${slug}:${projectId}:${environmentId}:${serviceId}`).digest("hex");
-    const webhookBinding = createHmac("sha256", master).update(`runport-app-alerts:railway-url:v1:${slug}:${projectId}:${environmentId}:${serviceId}`).digest("hex").slice(0, 24);
+    const webhookSecret = createHmac("sha256", master).update(`runport-app-alerts:railway:${slug}:${projectId}:${environmentId}:${serviceId}:${registrationId}`).digest("hex");
+    const webhookBinding = createHmac("sha256", master).update(`runport-app-alerts:railway-url:v1:${slug}:${projectId}:${environmentId}:${serviceId}:${registrationId}`).digest("hex").slice(0, 24);
     expect(calls[webhook].body.variables.input).toMatchObject({
       projectId, workspaceId, ephemeralEnvironments: false,
       channelConfigs: [{type: "webhook", url: `https://alerts.example.test/_runport/alerts/railway/${slug}?binding=${webhookBinding}`,
@@ -144,6 +145,7 @@ globalThis.fetch = async (input, options) => {
     const original = JSON.parse(await readFile(join(root, "registry.backup.json"), "utf8")).apps;
     expect(apps).toHaveLength(original.length);
     expect(apps[0]).toMatchObject({ ...original[0], alerts: { environmentId, serviceId } });
+    expect(apps[0].alerts.registrationId).toBe(registrationId);
     expect(apps[0].alerts.webhook).toEqual({ id: webhookId, projectId, workspaceId });
     expect(JSON.stringify(apps)).not.toContain(webhookSecret);
   } finally {
