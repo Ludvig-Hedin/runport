@@ -347,11 +347,23 @@ export function createAppAlerts({ path, master, owner, limits, deliver, log, clo
   }
 
   return async (request: Request): Promise<Response> => {
-    const path = new URL(request.url).pathname;
+    const url = new URL(request.url);
+    const path = url.pathname;
     if (path === "/internal/app-alerts") {
       if (!authenticated(request, monitorKey(master))) return status(401);
       const now = clock();
       if (request.method === "GET") {
+        const maintenanceAfter = url.searchParams.get("accountMaintenanceAfter");
+        if (maintenanceAfter !== null) {
+          if (maintenanceAfter && !/^[a-z][a-z0-9-]{1,35}$/.test(maintenanceAfter)) return status(400);
+          // Maintenance needs its own traversal even when the Railway
+          // alert checks are backing off. Reading it sends no alerts.
+          const rows = db.query<Pick<Registration, "slug" | "serviceId" | "environmentId" | "domain">, [string]>(`
+            SELECT slug, serviceId, environmentId, domain FROM apps WHERE accountMaintenance = 1 AND slug > ? ORDER BY slug LIMIT 21
+          `).all(maintenanceAfter);
+          const apps = rows.slice(0, 20);
+          return Response.json({ apps, next: rows.length > 20 ? apps[19].slug : null });
+        }
         const cursor = db.query<{ cursor: string; waitUntil: number }, []>("SELECT cursor, waitUntil FROM monitor_cursor WHERE id = 1").get()!;
         if (cursor.waitUntil > now) return Response.json({ apps: [] });
         const page = db.query(`

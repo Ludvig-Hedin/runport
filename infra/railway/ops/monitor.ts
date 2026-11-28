@@ -1,5 +1,6 @@
 import { processAppAlerts } from "./app-alert-monitor";
 import { analyticsOwnerAlert, updateIncident, type MonitorState } from "./monitor-alerts";
+import { maintainAccounts } from "./account-maintenance";
 
 // Every few minutes: is the API up, is the mail gateway up, and is last
 // night's backup there? Emails the owner when something is wrong, at most
@@ -71,6 +72,10 @@ async function checkPlatform() {
 const jobs = [{ name: "platform monitor", run: checkPlatform() }];
 if (process.env.RUNPORT_ALERT_MONITOR_KEY) {
   jobs.push({ name: "app alerts", run: processAppAlerts() });
+}
+
+if (process.env.RUNPORT_ALERT_MONITOR_KEY) {
+  jobs.push({ name: "account maintenance", run: maintainAccounts() });
 }
 
 const results = await Promise.allSettled(jobs.map(job => job.run));

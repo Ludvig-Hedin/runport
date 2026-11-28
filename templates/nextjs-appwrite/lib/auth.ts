@@ -9,6 +9,7 @@ import { allowed } from "./rate-limit";
 import { appUrl, authMode } from "./config";
 import { setSessionCookie } from "./session";
 import { routes } from "@/runport.config";
+import { isReservedAccountEmail } from "./account-deletion";
 
 // Email + password sign-in, used when AUTH_MODE=password. Sign-out works in every mode.
 
@@ -32,7 +33,7 @@ function readCredentials(form: FormData) {
 export async function signUp(_: FormState, form: FormData): Promise<FormState> {
   if (authMode() !== "password") return PASSWORD_OFF;
   const { email, password, name } = readCredentials(form);
-  if (!isEmail(email)) return { error: INVALID_EMAIL };
+  if (!isEmail(email) || isReservedAccountEmail(email)) return { error: INVALID_EMAIL };
   if (password.length < 8) return { error: "Password needs at least 8 characters." };
   if (!(await allowed("signUp"))) return { error: TOO_MANY_ATTEMPTS };
   try {

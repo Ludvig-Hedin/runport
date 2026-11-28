@@ -15,13 +15,14 @@ type SubmitProps = React.ButtonHTMLAttributes<HTMLButtonElement> & {
   variant?: "primary" | "secondary" | "link";
   /** Disable until the form has what it needs. */
   ready?: boolean;
+  pendingLabel?: string;
   ref?: React.Ref<HTMLButtonElement>;
 };
 
 const VARIANT_ELEMENT = { primary: "primaryButton", secondary: "secondaryButton", link: "link" } as const;
 
 /** A submit button that shows a spinner while its form is sending. */
-export function SubmitButton({ appearance, variant = "primary", ready = true, children, ...rest }: SubmitProps) {
+export function SubmitButton({ appearance, variant = "primary", ready = true, pendingLabel, children, ...rest }: SubmitProps) {
   const { pending, data } = useFormStatus();
   const { cls } = resolveAppearance(appearance);
   // With several submit buttons in one form, only the pressed one spins.
@@ -36,7 +37,7 @@ export function SubmitButton({ appearance, variant = "primary", ready = true, ch
       {mine ? (
         <>
           <Spinner />
-          <span className="sr-only">{children}</span>
+          {pendingLabel ?? <span className="sr-only">{children}</span>}
         </>
       ) : (
         children

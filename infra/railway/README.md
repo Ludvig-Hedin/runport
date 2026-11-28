@@ -168,6 +168,21 @@ the apps. It preserves account maintenance enrolment. When rolling out both
 features, deploy the gateway that supports both app registrations before
 running the backfill or the combined monitor.
 
+### Account deletion maintenance
+
+Apps that include the account maintenance route are registered for cleanup
+on deploy. Every five minutes the monitor sends the app an authenticated POST
+to finish account deletions in its Appwrite queue. This runs separately from
+outage checks, including during Railway API backoff. It can wake apps that
+opt in. Older deployments stay out of the maintenance inventory.
+
+For the coordinated rollout, back up the gateway's alert database and
+verify the backup first. From the published canonical main, deploy the
+gateway and monitor with `./apply.sh deploy-gateway` and
+`./apply.sh deploy-monitor`. This reuses the monitor's existing alert key.
+Update and redeploy the app source with `deploy-app` to install its own
+maintenance key and run table setup.
+
 ### Gateway storage cutover
 
 Run the cutover from published main with a short mail maintenance window.

@@ -54,12 +54,13 @@ The app's private Git remote is on Runport Git or GitHub, as chosen at setup.
   `allowed()` too.
 - Data uses Appwrite TablesDB. Tables are declared in `lib/schema.ts`. To add a
   table or column, add it there and run `bun run setup`.
-- Mark a table `personal: true` in `lib/schema.ts` when each row belongs to
-  one person. Setup adds an indexed `owner` column (and fills it for older
-  rows that clearly have one owner). Set it on create with
-  `...(await ownerData())` from `lib/owner.ts`, never from form input.
-- Tables have row security on. A row created with the session client belongs
-  to that user only. For shared data, pass explicit `permissions` to `createRow`.
+- Mark a table `personal: true` in `lib/schema.ts` only when every row stays
+  private to one person for its entire lifetime. Create rows through
+  `ownerData()` from `lib/owner.ts` and pass both its `data` and `permissions`
+  to `createRow`. Setup indexes the owner field and backfills clear owners on
+  legacy rows. Keep both the owner and the permissions fixed after creation.
+- Put shared data in a separate table with explicit permissions. Keep owner
+  and permission changes out of personal-table actions, migrations and jobs.
 - `app/items` is the example feature. Replace or rename it freely.
 - **App error alerts** are enabled by `deploy-app`. Keep both instrumentation
   files, the grant in the root layout and the `/api/runport/error` route.
@@ -170,6 +171,22 @@ For a custom event, call `track("filter-applied", { filter: "open" })` in a
 client component using `import { track } from "@/lib/analytics"`. First add
 `"filter-applied": { filter: ["open", "all"] }` to `events` in that policy.
 Unknown event names, fields, and values are discarded.
+
+## Account deletion
+
+People can close their account from the account page. Runport resumes
+unfinished deletions every five minutes on deployed apps. For a deployment
+outside Runport, set a server-only `RUNPORT_ACCOUNT_MAINTENANCE_KEY` and have
+the scheduler send authenticated POSTs to `/api/runport/account-maintenance`.
+Use 32 random bytes encoded as 64 lowercase hexadecimal characters for the
+key. Run `bun run setup` to create the queue and resume unfinished work.
+
+The deletion record stays until a later run verifies the block, anonymised
+account, empty messaging targets and empty personal data at least ten
+minutes after the first clean verification. Repairs restart that interval.
+The worker skips any row whose owner and permissions do not name only the
+closing account. Use `isReservedAccountEmail()` in any new email-change
+action to reserve `deleted.invalid` for anonymous account placeholders.
 
 ## Appwrite MCP
 

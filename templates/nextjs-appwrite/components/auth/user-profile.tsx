@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useActionState, useEffect, useRef, useState, useTransition } from "react";
-import { type AccountState, changePassword, signOutDevices, updateName } from "@/lib/account";
+import { type AccountState, changePassword, deleteAccount, signOutDevices, updateName } from "@/lib/account";
 import { type Appearance, resolveAppearance } from "./appearance";
 import { Message } from "./card";
 import { Field, PasswordField, Spinner, SubmitButton } from "./controls";
@@ -58,6 +58,13 @@ function Section({ appearance, title, description, children, danger }: {
   );
 }
 
+function AccountMessage({ appearance, error, notice, signedOut }: AccountState & { appearance?: Appearance }) {
+  const { cls } = resolveAppearance(appearance);
+  return <Message appearance={appearance} notice={notice} error={signedOut ? (
+    <>You are signed out. <Link href="/login" className={cls("link")}>Sign in</Link> again.</>
+  ) : error} />;
+}
+
 function NameForm({ appearance, name }: { appearance?: Appearance; name: string }) {
   const [state, action] = useActionState<AccountState, FormData>(updateName, {});
   const [value, setValue] = useState(name);
@@ -72,7 +79,7 @@ function NameForm({ appearance, name }: { appearance?: Appearance; name: string 
     <form action={action} className={cls("form")}>
       <Field appearance={appearance} label="Name" name="name" autoComplete="name" maxLength={128}
         value={value} onChange={(e) => setValue(e.target.value)} />
-      <Message appearance={appearance} error={state.error} notice={changed ? undefined : state.notice} />
+      <AccountMessage appearance={appearance} {...state} notice={changed ? undefined : state.notice} />
       <div className="rp-section-actions">
         <SubmitButton appearance={appearance} ready={changed && value.trim().length > 0}>Save</SubmitButton>
       </div>
@@ -111,7 +118,7 @@ function PasswordForm({ appearance, email }: { appearance?: Appearance; email: s
       <PasswordField appearance={appearance} label="New password" name="password" required minLength={8} autoComplete="new-password"
         value={next} onChange={(e) => setNext(e.target.value)}
         aside={<span className="rp-hint">At least 8 characters</span>} />
-      <Message appearance={appearance} error={state.error} notice={state.notice} />
+      <AccountMessage appearance={appearance} {...state} />
       <div className="rp-section-actions">
         <SubmitButton appearance={appearance} ready={current.length > 0 && next.length >= 8}>Change password</SubmitButton>
       </div>
@@ -179,7 +186,7 @@ function Devices({ appearance, devices }: { appearance?: Appearance; devices: De
         ))}
       </ul>
       <div ref={statusRef} tabIndex={-1} className="rp-status">
-        <Message appearance={appearance} error={message.error} notice={message.notice} />
+        <AccountMessage appearance={appearance} {...message} />
       </div>
       {others.length > 1 && (
         <div className="rp-section-actions">
@@ -190,6 +197,52 @@ function Devices({ appearance, devices }: { appearance?: Appearance; devices: De
         </div>
       )}
     </>
+  );
+}
+
+function DeleteAccount({ appearance, email }: { appearance?: Appearance; email: string }) {
+  const [open, setOpen] = useState(false);
+  const opener = useRef<HTMLButtonElement>(null);
+  const returnFocus = useRef(false);
+  const { cls } = resolveAppearance(appearance);
+  useEffect(() => {
+    if (!open && returnFocus.current) {
+      opener.current?.focus();
+      returnFocus.current = false;
+    }
+  }, [open]);
+  if (!open) {
+    return (
+      <div className="rp-section-actions">
+        <button ref={opener} type="button" className={cls("secondaryButton", "rp-danger-button")} onClick={() => setOpen(true)}>
+          Delete account
+        </button>
+      </div>
+    );
+  }
+  return <DeleteAccountForm appearance={appearance} email={email} onCancel={() => {
+    returnFocus.current = true;
+    setOpen(false);
+  }} />;
+}
+
+function DeleteAccountForm({ appearance, email, onCancel }: { appearance?: Appearance; email: string; onCancel: () => void }) {
+  const [state, action, pending] = useActionState(deleteAccount, {});
+  const [confirm, setConfirm] = useState("");
+  const { cls } = resolveAppearance(appearance);
+  return (
+    <form action={action} className={cls("form")}>
+      <Field appearance={appearance} label="Type your email to confirm" placeholder={email} name="confirm" autoComplete="off" autoFocus
+        autoCapitalize="none" spellCheck={false} value={confirm} readOnly={pending} onChange={(e) => setConfirm(e.target.value)} />
+      <AccountMessage appearance={appearance} {...state} />
+      <div className="rp-section-actions">
+        <button type="button" className={cls("link")} disabled={pending} onClick={onCancel}>Cancel</button>
+        <SubmitButton appearance={appearance} className="rp-danger-solid" pendingLabel="Deleting…"
+          ready={confirm.trim().toLowerCase() === email.toLowerCase()}>
+          Delete my account
+        </SubmitButton>
+      </div>
+    </form>
   );
 }
 
@@ -216,6 +269,11 @@ export function UserProfileView({ appearance, name, email, passwordMode, devices
 
         <Section appearance={appearance} title="Devices" description="Where you are signed in right now.">
           <Devices key={devices?.map((d) => d.id).join() ?? "error"} appearance={appearance} devices={devices} />
+        </Section>
+
+        <Section appearance={appearance} title="Delete account" danger
+          description="Removes your account and the data that belongs only to you in this app. This cannot be undone. Things you shared with others stay with them.">
+          <DeleteAccount appearance={appearance} email={email} />
         </Section>
       </div>
     </main>

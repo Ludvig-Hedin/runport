@@ -8,14 +8,12 @@ import { DATABASE_ID } from "@/lib/schema";
 
 const TABLE = { databaseId: DATABASE_ID, tableId: "items" };
 
-// The session client acts as the signed-in user. New rows get that user's
-// permissions by default, so nobody else can read or change them.
-
 export async function addItem(form: FormData): Promise<void> {
   const title = String(form.get("title") ?? "").trim();
   if (!title) return;
   const { tables } = await createSessionClient();
-  await tables.createRow({ ...TABLE, rowId: ID.unique(), data: { title, done: false, ...(await ownerData()) } });
+  const { data, permissions } = await ownerData();
+  await tables.createRow({ ...TABLE, rowId: ID.unique(), data: { ...data, title, done: false }, permissions });
   revalidatePath("/items");
 }
 
