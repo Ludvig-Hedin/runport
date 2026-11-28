@@ -1,5 +1,6 @@
 import { readFileSync } from "node:fs";
 import { bucket, defineRailway, image, project, ref, service, volume } from "railway/iac";
+import { analyticsDatabase, analyticsService } from "./analytics.ts";
 
 // Runport on Railway: Appwrite 2.6.1 from its official images, the mail
 // gateway (delivering through Cloudflare, infra/cloudflare-mail) and one
@@ -12,6 +13,7 @@ const REGION_ID = "europe-west4-drams3a"; // Amsterdam
 const REGION = { [REGION_ID]: 1 };
 /** Matches what Railway created, so plans stay clean. */
 const DISK = { region: REGION_ID, sizeMB: 50000 };
+const OWNER_ALERT_ADDRESS = "ludvig@ludvighedin.com";
 
 const secret = (name: string): string => {
   const value = process.env[name];
@@ -107,7 +109,7 @@ export default defineRailway(() => {
   const mailGateway = service("mail-gateway", {
     // Built from infra/mail-gateway with `railway up`; no source here.
     replicas: REGION,
-    volumeMounts: { "mail-gateway-data": { mountPath: "/data" } },
+    volumeMounts: { "/data": gatewayData },
     env: {
       GATEWAY_MASTER_KEY: secret("SD_MAIL_MASTER_KEY"),
       DELIVERY: "cloudflare",
@@ -118,6 +120,7 @@ export default defineRailway(() => {
       MAIL_APP_NEWS_DAILY_LIMIT: "500",
       MAIL_NEWS_SHARE_PERCENT: "70",
       SENDER_DOMAINS: "runport.app,apps.ludvighedin.com",
+      ALERT_TO: OWNER_ALERT_ADDRESS,
     },
   });
 
@@ -126,6 +129,34 @@ export default defineRailway(() => {
     // Built from infra/railway/router with `railway up`; no source here.
     replicas: REGION,
     healthcheck: "/health",
+  });
+
+  const analytics = analyticsService(REGION, secret("SD_ANALYTICS_DB_PASS"), secret("SD_ANALYTICS_APP_SECRET"), secret("SD_ANALYTICS_INGEST_SECRET"));
+  const gitData = volume("git-data", { region: REGION_ID, sizeMB: 2000 });
+  const git = service("git", {
+    // Built from the pinned official Forgejo image in ../git/Dockerfile.
+    // Keep Git available for the first HTTPS request and the five-minute probe.
+    replicas: REGION,
+    healthcheck: "/api/healthz",
+    volumeMounts: { "git-data": { mountPath: "/data" } },
+    env: {
+      PORT: "3000",
+      GIT_BACKUP_TOKEN: secret("SD_GIT_BACKUP_TOKEN"),
+      APP_NAME: "Runport Git",
+      GITEA__server__DOMAIN: "git.runport.app",
+      GITEA__server__ROOT_URL: "https://git.runport.app/",
+      GITEA__server__HTTP_ADDR: "::",
+      GITEA__server__HTTP_PORT: "3000",
+      GITEA__server__DISABLE_SSH: "true",
+      GITEA__database__DB_TYPE: "sqlite3",
+      GITEA__database__PATH: "/data/gitea/forgejo.db",
+      GITEA__security__INSTALL_LOCK: "true",
+      GITEA__service__DISABLE_REGISTRATION: "true",
+      GITEA__service__REQUIRE_SIGNIN_VIEW: "true",
+      GITEA__repository__FORCE_PRIVATE: "true",
+      GITEA__actions__ENABLED: "false",
+      GITEA__cron_0X2E_update_checker__ENABLED: "false",
+    },
   });
 
   // Scheduled jobs from infra/railway/ops (deployed with `railway up`).
@@ -137,7 +168,7 @@ export default defineRailway(() => {
     S3_REGION: ref(files, "REGION"),
     CLOUDFLARE_MAIL_URL: "https://runport-mail.ludvighedin15.workers.dev/",
     CLOUDFLARE_MAIL_TOKEN: secret("SD_CF_MAIL_TOKEN"),
-    ALERT_TO: "ludvig@ludvighedin.com",
+    ALERT_TO: OWNER_ALERT_ADDRESS,
   };
   const backup = service("backup", {
     replicas: REGION,
@@ -149,14 +180,17 @@ export default defineRailway(() => {
       PGUSER: "user",
       PGPASSWORD: secret("SD_DB_PASS"),
       PGDATABASE: "appwrite",
+      ANALYTICS_DATABASE: analyticsDatabase,
       KEEP_DAYS: "14",
+      GIT_BACKUP_URL: "http://git.railway.internal:8081/backup",
+      GIT_BACKUP_TOKEN: secret("SD_GIT_BACKUP_TOKEN"),
     },
   });
   const monitor = service("monitor", {
     replicas: REGION,
     start: "bun monitor.ts",
     deploy: { cronSchedule: "*/5 * * * *", restartPolicyType: "NEVER" },
-    env: { ...opsEnv, ALERT_EVERY_HOURS: "3" },
+    env: { ...opsEnv, RUNPORT_ALERT_MONITOR_KEY: secret("SD_APP_ALERT_MONITOR_KEY"), ALERT_EVERY_HOURS: "3", ANALYTICS_HEALTH_URL: "https://analytics.runport.app/runport/ingest", GIT_HEALTH_URL: "https://git.runport.app/api/healthz" },
   });
 
   return project("runport", {
@@ -179,6 +213,9 @@ export default defineRailway(() => {
       gatewayData,
       mailGateway,
       router,
+      analytics,
+      gitData,
+      git,
       backup,
       monitor,
     ],

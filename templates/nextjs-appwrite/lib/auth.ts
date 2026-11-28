@@ -3,12 +3,13 @@
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 import { AppwriteException, ID } from "node-appwrite";
-import { createAdminClient, createSessionClient, sessionCookieName } from "./appwrite";
+import { createAdminClient, createAuthClient, createSessionClient, sessionCookieName } from "./appwrite";
 import { INVALID_EMAIL, TOO_MANY_ATTEMPTS, friendlyError, isEmail } from "./auth-errors";
 import { allowed } from "./rate-limit";
 import { appUrl, authMode } from "./config";
 import { setSessionCookie } from "./session";
 import { routes } from "@/runport.config";
+import { isReservedAccountEmail } from "./account-deletion";
 
 // Email + password sign-in, used when AUTH_MODE=password. Sign-out works in every mode.
 
@@ -17,7 +18,7 @@ export type FormState = { error?: string; notice?: string };
 const PASSWORD_OFF: FormState = { error: "Sign-in with a password is turned off." };
 
 async function startSession(email: string, password: string): Promise<void> {
-  const { account } = createAdminClient();
+  const { account } = await createAuthClient();
   await setSessionCookie(await account.createEmailPasswordSession({ email, password }));
 }
 
@@ -32,7 +33,7 @@ function readCredentials(form: FormData) {
 export async function signUp(_: FormState, form: FormData): Promise<FormState> {
   if (authMode() !== "password") return PASSWORD_OFF;
   const { email, password, name } = readCredentials(form);
-  if (!isEmail(email)) return { error: INVALID_EMAIL };
+  if (!isEmail(email) || isReservedAccountEmail(email)) return { error: INVALID_EMAIL };
   if (password.length < 8) return { error: "Password needs at least 8 characters." };
   if (!(await allowed("signUp"))) return { error: TOO_MANY_ATTEMPTS };
   try {

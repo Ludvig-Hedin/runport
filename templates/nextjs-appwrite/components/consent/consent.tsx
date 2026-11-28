@@ -1,6 +1,6 @@
 "use client";
 
-import { createContext, useCallback, useContext, useEffect, useId, useState } from "react";
+import { createContext, useCallback, useContext, useEffect, useId, useRef, useState } from "react";
 import { type Appearance, resolveAppearance } from "@/components/auth/appearance";
 import { consent as consentConfig } from "@/runport.config";
 
@@ -26,9 +26,12 @@ function readChoice(): ConsentChoice | null {
   const raw = document.cookie.split("; ").find((c) => c.startsWith(`${COOKIE}=`));
   if (!raw) return null;
   try {
-    const parsed = JSON.parse(decodeURIComponent(raw.slice(COOKIE.length + 1))) as Partial<ConsentChoice> & { v?: number };
-    if (parsed.v !== consentConfig.version) return null; // the categories changed: ask again
-    return { ...NONE, ...parsed };
+    const parsed: unknown = JSON.parse(decodeURIComponent(raw.slice(COOKIE.length + 1)));
+    if (typeof parsed !== "object" || parsed === null) return null;
+    const record = parsed as Record<string, unknown>;
+    if (record.v !== consentConfig.version) return null; // the categories changed: ask again
+    // Only a literal true counts as consent; anything else is a no.
+    return { analytics: record.analytics === true, marketing: record.marketing === true, preferences: record.preferences === true };
   } catch {
     return null;
   }
@@ -52,7 +55,7 @@ const ConsentContext = createContext<ConsentContextValue>({ choice: null, openSe
 export function useConsent(category: ConsentCategory): boolean {
   const { choice } = useContext(ConsentContext);
   if (!consentConfig.categories.includes(category)) return false;
-  return choice?.[category] ?? false;
+  return choice?.[category] === true;
 }
 
 /** Renders its children only after the visitor allowed `category`. */
@@ -116,10 +119,24 @@ function ConsentPanel({ appearance, view, choice, onDecide, onCustomize }: Panel
   const categories = consentConfig.categories;
   const [draft, setDraft] = useState<ConsentChoice>(choice ?? NONE);
   const all = Object.fromEntries(categories.map((c) => [c, true])) as Partial<ConsentChoice>;
+  const card = useRef<HTMLDivElement>(null);
+
+  // Tell the page how tall the panel is, so pages can keep their content scrollable above it.
+  useEffect(() => {
+    const root = document.documentElement;
+    const node = card.current;
+    if (!node) return;
+    const observer = new ResizeObserver(() => root.style.setProperty("--rp-consent-h", `${node.offsetHeight + 24}px`));
+    observer.observe(node);
+    return () => {
+      observer.disconnect();
+      root.style.removeProperty("--rp-consent-h");
+    };
+  }, []);
 
   return (
     <section className={cls("root", "rp-consent")} style={style} role="dialog" aria-modal="false" aria-labelledby={titleId}>
-      <div className={cls("card", "rp-consent-card")} data-variant="raised">
+      <div ref={card} className={cls("card", "rp-consent-card")} data-variant="raised">
         <h2 id={titleId} className="rp-consent-title">
           {view === "banner" ? "We use cookies" : "Cookie settings"}
         </h2>

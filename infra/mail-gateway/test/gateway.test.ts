@@ -2,14 +2,45 @@ import { afterAll, beforeEach, describe, expect, test } from "bun:test";
 import { createHmac } from "node:crypto";
 import nodemailer, { type SendMailOptions } from "nodemailer";
 import type { Config } from "../src/config";
-import { DeliveryError, cloudflareDelivery, type Envelope } from "../src/deliver";
-import { appPassword, headerFrom } from "../src/identity";
+import { DeliveryError, cloudflareDelivery, sesDelivery, type Envelope } from "../src/deliver";
+import { appPassword, headerFrom, loginPassword } from "../src/identity";
 import { Limits, stockholmDay } from "../src/limits";
 import { createSmtpServer } from "../src/server";
+import { formMailHandler } from "../src/form-mail";
 
-const caps = (total: number, perApp: number, perAppNews = 100, newsShare = 1) => ({ total, perApp, perAppNews, newsShare });
+const caps = (total: number, perApp: number, perAppNews = 100, newsShare = 1) => ({
+  total, perApp, perAppNews, newsShare, perAppForm: 50, perHourForm: 10, formShare: 0.1,
+});
+
+test("SES maps confirmed throttling and permanent refusals, keeping server errors ambiguous", async () => {
+  const envelope = { from: "alerts@example.test", to: ["owner@example.test"] };
+  for (const [name, code, retry, definite] of [
+    ["TooManyRequestsException", 429, true, true],
+    ["ThrottlingException", 400, true, true],
+    ["MessageRejected", 400, false, true],
+    ["ServiceUnavailable", 503, true, false],
+    ["RequestTimeoutException", 408, true, false],
+  ] as const) {
+    const deliver = sesDelivery("test-region", {
+      send: async () => { throw Object.assign(new Error("a request containing short-lived provider details"), { name, $metadata: { httpStatusCode: code } }); },
+    });
+    await expect(deliver(envelope, Buffer.from("mail"))).rejects.toMatchObject({ retry, definite });
+  }
+});
 
 describe("Limits", () => {
+  test("alert caps and login headroom are reserved in the shared quota", () => {
+    const limits = new Limits(":memory:", { ...caps(10, 10), alertPerApp: 2, alertTotal: 3, loginReserve: 3 });
+    expect(limits.reserve("one", "alert", 2).ok).toBe(true);
+    expect(limits.reserve("one", "alert", 1).ok).toBe(false);
+    expect(limits.reserve("two", "alert", 1).ok).toBe(true);
+    expect(limits.reserve("three", "alert", 1).ok).toBe(false);
+    expect(limits.reserve("one", "mail", 4).ok).toBe(true);
+    expect(limits.reserve("one", "news", 1).ok).toBe(false);
+    expect(limits.reserve("one", "mail", 1).ok).toBe(false);
+    expect(limits.reserve("one", "login", 3).ok).toBe(true);
+    expect(limits.today().total).toBe(10);
+  });
   test("counts recipients per app and in total", () => {
     const limits = new Limits(":memory:", caps(5, 3));
     expect(limits.reserve("a", "mail", 3).ok).toBe(true);
@@ -64,7 +95,7 @@ const config: Config = {
   smtpPort: PORT,
   httpPort: 0,
   dataFile: ":memory:",
-  caps: caps(4, 3, 2, 0.5),
+  caps: { ...caps(4, 3, 2, 0.5), loginReserve: 0, alertTotal: 30, alertPerApp: 4 },
   maxRecipients: 3,
   maxBytes: 20_000,
   senderDomains: ["apps.example.com"],
@@ -157,6 +188,12 @@ describe("headerFrom", () => {
 });
 
 describe("SMTP gateway", () => {
+  test("only the separate Appwrite credential can use an app's login budget", async () => {
+    const from = "shop@apps.example.com";
+    expect(await smtpCode(send("shop:login", ["alice@example.com"], { from }))).toBe(535);
+    await send("shop:login", ["alice@example.com"], { from }, loginPassword(config.masterKey, "shop"));
+    expect(limits.today().apps.shop).toEqual({ mail: 0, news: 0, login: 1 });
+  });
   beforeEach(() => {
     delivered = [];
     failNext = false;
@@ -295,6 +332,21 @@ describe("cloudflareDelivery", () => {
     }
   });
 
+  test("an incomplete zero-send receipt is ambiguous, never a definitive refusal", async () => {
+    for (const receipt of [
+      { sent: 0, failed: 0, codes: ["E_INTERNAL"] },
+      { sent: 0, failed: 1, codes: [] },
+      { sent: 0, codes: ["E_INTERNAL"] },
+      { sent: 0, failed: 2, codes: ["E_INTERNAL", "E_INTERNAL"] },
+    ]) {
+      const srv = Bun.serve({ port: 0, fetch: () => Response.json(receipt) });
+      const error = await cloudflareDelivery(`http://127.0.0.1:${srv.port}/`, "t")({ from: "a@a.com", to: ["b@b.com"] }, Buffer.from("x")).catch((e) => e);
+      expect(error).toBeInstanceOf(DeliveryError);
+      expect((error as DeliveryError).message).toContain("unrecognized delivery receipt");
+      srv.stop();
+    }
+  });
+
   test("marks outages as retryable and bad requests as permanent", async () => {
     for (const [status, retry] of [[503, true], [429, true], [400, false], [401, false]] as const) {
       const srv = Bun.serve({ port: 0, fetch: () => new Response("no", { status }) });
@@ -304,4 +356,97 @@ describe("cloudflareDelivery", () => {
       srv.stop();
     }
   });
+});
+
+describe("form mail HTTPS bridge", () => {
+  const owner = "owner@example.com";
+  const token = createHmac("sha256", config.masterKey).update(`form-mail:shop:${owner}`).digest("hex");
+  const handler = formMailHandler(config, {
+    reserve: (...args) => limits.reserve(...args), release: (...args) => limits.release(...args),
+  }, async (envelope) => {
+    delivered.push(envelope);
+    return 1;
+  }, () => {});
+  const sendForm = (to = owner, app = "shop", from = "shop@apps.example.com") =>
+    handler(new Request("https://runport.example/runport-mail/form", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${token}`, "X-Runport-App": app },
+      body: JSON.stringify({ from, to, subject: "New message", text: "Hello" }),
+    }));
+
+  beforeEach(() => {
+    limits = new Limits(":memory:", { ...config.caps, total: 100, perAppForm: 1 });
+    delivered = [];
+    failNext = false;
+    partial = null;
+  });
+
+  test("only sends to the one recipient and app bound to the token", async () => {
+    expect((await sendForm("visitor@example.com")).status).toBe(401);
+    expect((await sendForm(owner, "other", "other@apps.example.com")).status).toBe(401);
+    expect((await sendForm(owner, "shop", "other@apps.example.com")).status).toBe(400);
+    expect((await sendForm()).status).toBe(204);
+    expect(delivered).toEqual([{ from: "shop@apps.example.com", to: [owner] }]);
+  });
+
+  test("has an independent daily budget from SMTP account mail", async () => {
+    await send("shop", ["one@example.net", "two@example.net", "three@example.net"]);
+    expect((await sendForm()).status).toBe(204);
+    expect((await sendForm()).status).toBe(429);
+    expect(delivered).toHaveLength(2);
+  });
+});
+
+test("form mail leaves explicit login headroom and limits each app per hour", () => {
+  const limits = new Limits(":memory:", { ...caps(100, 20, 100, 0.7), perAppForm: 50, perHourForm: 2, formShare: 0.1 });
+  const now = new Date("2026-11-27T10:15:00Z");
+  expect(limits.reserve("app", "form", 2, now).ok).toBe(true);
+  expect(limits.reserve("app", "form", 1, now).ok).toBe(false);
+  expect(limits.reserve("app", "form", 2, new Date("2026-11-27T11:15:00Z")).ok).toBe(true);
+  expect(limits.reserve("app", "mail", 20, now).ok).toBe(true);
+  expect(limits.reserve("news", "news", 46, now).ok).toBe(true);
+  const headroom = new Limits(":memory:", caps(100, 30, 100, 0.7));
+  expect(headroom.reserve("news", "news", 69, now).ok).toBe(true);
+  expect(headroom.reserve("one", "form", 1, now).ok).toBe(true);
+  expect(headroom.reserve("two", "form", 1, now).ok).toBe(false);
+  expect(headroom.reserve("one", "mail", 30, now).ok).toBe(true);
+  expect(limits.reserve("other", "mail", 20, now).ok).toBe(true);
+});
+
+test("form daily caps are independent across apps and bound globally", () => {
+  const limits = new Limits(":memory:", { ...caps(100, 20), perAppForm: 4, perHourForm: 10, formShare: 0.1 });
+  expect(limits.reserve("first", "form", 4).ok).toBe(true);
+  expect(limits.reserve("first", "form", 1).ok).toBe(false);
+  expect(limits.reserve("second", "form", 4).ok).toBe(true);
+  expect(limits.reserve("third", "form", 2).ok).toBe(true);
+  expect(limits.reserve("fourth", "form", 1).ok).toBe(false);
+  expect(limits.reserve("first", "mail", 20).ok).toBe(true);
+});
+
+test("all mail kinds share the daily total and enforce independent budgets", () => {
+  const limits = new Limits(":memory:", { ...caps(100, 30, 100, 1), loginReserve: 10, alertPerApp: 3, alertTotal: 5 });
+  const now = new Date("2026-11-27T10:15:00Z");
+  expect(limits.reserve("app", "login", 6, now).ok).toBe(true);
+  expect(limits.reserve("app", "mail", 4, now).ok).toBe(true);
+  expect(limits.reserve("app", "alert", 3, now).ok).toBe(true);
+  expect(limits.reserve("app", "alert", 1, now).ok).toBe(false);
+  expect(limits.reserve("other", "alert", 2, now).ok).toBe(true);
+  expect(limits.reserve("third", "alert", 1, now)).toMatchObject({ ok: false, reason: "daily limit for app alerts reached" });
+
+  expect(limits.reserve("app", "news", 69, now).ok).toBe(true);
+  expect(limits.reserve("app", "form", 1, now).ok).toBe(true);
+  for (const kind of ["news", "form"] as const) {
+    expect(limits.reserve("other", kind, 1, now)).toMatchObject({ ok: false, reason: expect.stringContaining("automation budget") });
+  }
+
+  expect(limits.reserve("app", "mail", 11, now).ok).toBe(true);
+  for (const kind of ["mail", "news", "form", "alert"] as const) {
+    expect(limits.reserve("other", kind, 1, now)).toMatchObject({ ok: false, reason: expect.stringContaining("reserved for account") });
+  }
+  expect(limits.reserve("app", "login", 4, now).ok).toBe(true);
+  expect(limits.today(now)).toMatchObject({
+    total: 100,
+    apps: { app: { mail: 15, login: 10, news: 69, form: 1, alert: 3 }, other: { alert: 2 } },
+  });
+  expect(limits.reserve("app", "login", 1, now).ok).toBe(false);
 });

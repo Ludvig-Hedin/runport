@@ -21,6 +21,23 @@
 	handle /health {
 		respond "ok" 200
 	}
+	@railwayAlerts path_regexp ^/_runport/alerts/railway/[a-z][a-z0-9-]{1,35}$
+	handle @railwayAlerts {
+		request_body {
+			max_size 24000B
+		}
+		reverse_proxy mail-gateway.railway.internal:8080
+	}
+	@appAlerts path_regexp ^/_runport/alerts/(register|report)/[a-z][a-z0-9-]{1,35}$
+	handle @appAlerts {
+		request_body {
+			max_size 512B
+		}
+		reverse_proxy mail-gateway.railway.internal:8080
+	}
+	handle /runport-mail/form {
+		reverse_proxy mail-gateway.railway.internal:8080
+	}
 	handle /v1/realtime* {
 		reverse_proxy appwrite-realtime.railway.internal:80
 	}

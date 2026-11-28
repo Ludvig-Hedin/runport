@@ -2,11 +2,16 @@ import { cp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { basename, join } from "node:path";
 import { AppwriteAdmin, AppwriteError } from "./appwrite-admin";
 import { config } from "./config";
+import { retireAppAlerts } from "./deploy-app-alerts";
+import { formMailSettings } from "./form-mail";
 import { readSecret } from "./keychain";
 import { run, succeeds } from "./exec";
-import { createPrivateRepo } from "./github";
+import { createPrivateRepo as createGitHubRepo } from "./github";
+import { createRunportRepo } from "./runport-git";
+import { selectGitHost, type GitHost } from "./git-host";
 import { type AppRecord, loadRegistry, nextFreePort, removeApp, upsertApp } from "./registry";
 import { assertAppwriteId, toSlug } from "./slug";
+import { provisionAppAnalytics } from "./analytics-integration";
 
 // Every step checks whether its result already exists, so calling create_app
 // again after a failure resumes where it stopped instead of duplicating.
@@ -17,6 +22,7 @@ const SKIP_IN_TEMPLATE = new Set(["node_modules", ".next", "next-env.d.ts", "tsc
 
 export type CreateAppInput = {
   name: string;
+  git?: GitHost;
   /** Only when Appwrite cannot create projects itself: an existing project id and server key. */
   projectId?: string;
   apiKey?: string;
@@ -48,11 +54,14 @@ async function writeEnv(file: string, values: Record<string, string>): Promise<v
   await writeFile(file, `# Written by the platform's create_app tool. Never commit this file.\n${body}\n`, { mode: 0o600 });
 }
 
-async function copyTemplate(folder: string, slug: string, port: number): Promise<void> {
+async function copyTemplate(folder: string, slug: string, port: number, name: string): Promise<void> {
   await cp(config.templateDir, folder, {
     recursive: true,
     filter: (src) => !SKIP_IN_TEMPLATE.has(basename(src)),
   });
+  const appConfig = join(folder, "runport.config.ts");
+  const templateConfig = await readFile(appConfig, "utf8");
+  await writeFile(appConfig, templateConfig.replace('export const appName = "New app";', () => `export const appName = ${JSON.stringify(name)};`));
   const pkgFile = join(folder, "package.json");
   const pkg = JSON.parse(await readFile(pkgFile, "utf8"));
   pkg.name = slug;
@@ -70,10 +79,10 @@ async function ensurePlatform(projectId: string, hostname: string): Promise<void
   }
 }
 
-/** Same derivation as the gateway's identity.ts: one password per app from the master key. */
+/** Uses the gateway credential reserved for Appwrite account mail. */
 async function mailPassword(app: string): Promise<string> {
   const key = await readSecret("mail-gateway-master-key");
-  return new Bun.CryptoHasher("sha256", key).update(`mail-gateway:${app}`).digest("hex");
+  return new Bun.CryptoHasher("sha256", key).update(`mail-gateway-login:${app}`).digest("hex");
 }
 
 async function ensureMail(projectId: string, slug: string, name: string): Promise<void> {
@@ -82,7 +91,7 @@ async function ensureMail(projectId: string, slug: string, name: string): Promis
     senderEmail: `${slug}@${config.mailDomain}`,
     host: config.mailGateway.host,
     port: config.mailGateway.port,
-    username: slug,
+    username: `${slug}:login`,
     password: await mailPassword(slug),
   });
 }
@@ -104,37 +113,54 @@ async function writeMcpConfig(folder: string, env: Record<string, string>): Prom
   await writeFile(join(folder, ".mcp.json"), `${JSON.stringify(mcp, null, 2)}\n`, { mode: 0o600 });
 }
 
-export async function createApp(input: CreateAppInput): Promise<CreateAppResult> {
+let creating = Promise.resolve();
+
+export function createApp(input: CreateAppInput): Promise<CreateAppResult> {
+  const result = creating.then(() => provisionApp(input));
+  creating = result.then(() => {}, () => {});
+  return result;
+}
+
+async function provisionApp(input: CreateAppInput): Promise<CreateAppResult> {
   const slug = toSlug(input.name);
   const steps: string[] = [];
-  if (!(await admin.health())) {
-    throw new Error(`Appwrite is not reachable at ${config.endpoint}. Start it: cd infra/appwrite && docker compose up -d`);
-  }
-
   const registry = await loadRegistry();
   const known = registry.apps.find((a) => a.slug === slug);
+  const git = selectGitHost(input.git, known?.git);
   const port = known?.port ?? nextFreePort(registry.apps);
   const folder = known?.folder ?? join(config.appsDir, slug);
   const projectId = assertAppwriteId(input.projectId ?? known?.projectId ?? slug);
   const owner = registry.apps.find((a) => a.projectId === projectId && a.slug !== slug);
   if (owner) throw new Error(`Project ${projectId} already belongs to app "${owner.slug}".`);
   if (input.apiKey && !/^[A-Za-z0-9_.-]+$/.test(input.apiKey)) throw new Error("That server key has unexpected characters.");
-  let createdByPlatform = known?.createdByPlatform ?? !input.projectId;
+  if (known && known.projectId !== projectId) throw new Error(`This app already uses project "${known.projectId}".`);
+  const record: AppRecord = {
+    slug, name: input.name, projectId, folder, port, git,
+    createdByPlatform: known?.createdByPlatform ?? !input.projectId,
+    repoUrl: known?.repoUrl ?? null,
+    createdAt: known?.createdAt ?? new Date().toISOString(),
+    ...(known?.alerts ? { alerts: known.alerts } : {}),
+    ...(!known || known.setupPending ? { setupPending: true } : {}),
+  };
+  // Reserve the chosen host before Appwrite, template or package setup can fail.
+  if (!known) await upsertApp(record);
+  if (!(await admin.health())) {
+    throw new Error(`Appwrite is not reachable at ${config.endpoint}. Start it: cd infra/appwrite && docker compose up -d`);
+  }
 
-  if (input.projectId) {
+  if (!record.createdByPlatform) {
     steps.push(`using existing project ${projectId}`);
   } else if (await admin.getProject(projectId)) {
     steps.push(`project ${projectId} already exists`);
   } else {
     await admin.createProject(projectId, input.name);
-    createdByPlatform = true;
     steps.push(`created project ${projectId}`);
   }
 
   if (await exists(folder)) {
     steps.push(`folder exists: ${folder}`);
   } else {
-    await copyTemplate(folder, slug, port);
+    await copyTemplate(folder, slug, port, input.name);
     steps.push(`copied starter kit to ${folder}`);
   }
 
@@ -146,9 +172,19 @@ export async function createApp(input: CreateAppInput): Promise<CreateAppResult>
     await writeEnv(envFile, env);
     steps.push(input.apiKey ? "saved the given server key" : "created a server key");
   }
+  if (!input.projectId && !env.RUNPORT_FORM_MAIL_TOKEN) {
+    const url = process.env.PLATFORM_FORM_MAIL_URL ?? "http://127.0.0.1:8026/runport-mail/form";
+    Object.assign(env, await formMailSettings(slug, url, env.RUNPORT_FORM_OWNER_EMAIL));
+    await writeEnv(envFile, env);
+  }
   await writeMcpConfig(folder, env);
+  const analytics = await provisionAppAnalytics(folder, slug);
+  if (Object.entries(analytics.variables).some(([name, value]) => env[name] !== value)) {
+    await writeEnv(envFile, { ...env, ...analytics.variables });
+  }
+  steps.push(analytics.note);
 
-  if (!input.projectId) {
+  if (record.createdByPlatform) {
     await ensurePlatform(projectId, "localhost");
     steps.push("allowed localhost as web platform");
     await ensureMail(projectId, slug, input.name);
@@ -159,24 +195,14 @@ export async function createApp(input: CreateAppInput): Promise<CreateAppResult>
   await run(["bun", "run", "setup"], folder);
   steps.push("installed packages and created tables");
 
-  let repoUrl = known?.repoUrl ?? null;
+  delete record.setupPending;
+  const hostLabel = git === "runport" ? "Runport" : "GitHub";
   try {
-    repoUrl = await createPrivateRepo(folder, slug);
-    steps.push(`private repo ${repoUrl}`);
+    record.repoUrl = await (git === "runport" ? createRunportRepo(folder, slug) : createGitHubRepo(folder, slug));
+    steps.push(`private ${hostLabel} repo ${record.repoUrl}`);
   } catch (error) {
-    steps.push(`GitHub repo not created: ${(error as Error).message}. Rerun create_app to retry.`);
+    steps.push(`${hostLabel} repo setup failed: ${(error as Error).message}. Rerun create_app to retry.`);
   }
-
-  const record: AppRecord = {
-    slug,
-    name: input.name,
-    projectId,
-    createdByPlatform,
-    folder,
-    port,
-    repoUrl,
-    createdAt: known?.createdAt ?? new Date().toISOString(),
-  };
   await upsertApp(record);
 
   return {
@@ -193,7 +219,7 @@ export async function listApps(): Promise<AppRecord[]> {
 
 export type DeleteResult = { slug: string; projectDeleted: boolean; folderDeleted: boolean; notes: string[] };
 
-/** Deletes the Appwrite project (users and data). The GitHub repo is never touched. */
+/** Deletes the Appwrite project (users and data) and preserves the Git repository. */
 export async function deleteApp(slug: string, confirm: string): Promise<DeleteResult> {
   if (confirm !== slug) throw new Error(`To delete, pass confirm equal to the app id "${slug}".`);
   const app = (await loadRegistry()).apps.find((a) => a.slug === slug);
@@ -201,7 +227,9 @@ export async function deleteApp(slug: string, confirm: string): Promise<DeleteRe
   const notes: string[] = [];
 
   let projectDeleted = false;
-  if (!app.createdByPlatform) {
+  if (app.setupPending) {
+    notes.push(`Kept Appwrite project ${app.projectId}: app setup did not finish.`);
+  } else if (!app.createdByPlatform) {
     notes.push(`Kept Appwrite project ${app.projectId}: it existed before the platform used it.`);
   } else if (await admin.getProject(app.projectId)) {
     await admin.deleteProject(app.projectId);
@@ -224,8 +252,9 @@ export async function deleteApp(slug: string, confirm: string): Promise<DeleteRe
       notes.push(`Kept ${app.folder}: it has uncommitted or unpushed work.`);
     }
   }
-  if (app.repoUrl) notes.push(`The GitHub repo ${app.repoUrl} was kept.`);
+  if (app.repoUrl) notes.push(`The ${app.git === "runport" ? "Runport" : "GitHub"} repo ${app.repoUrl} was kept.`);
 
+  if (app.alerts) await retireAppAlerts(slug, app.alerts);
   await removeApp(slug);
   return { slug, projectDeleted, folderDeleted, notes };
 }

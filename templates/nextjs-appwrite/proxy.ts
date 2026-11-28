@@ -1,11 +1,12 @@
 import { NextResponse, type NextRequest } from "next/server";
+import { ACCOUNT_MAINTENANCE_PATH, authorisedMaintenance } from "@/lib/account-maintenance";
 import { indexingAllowed, sitePassword } from "@/lib/config";
 import { safeEqual, unlockCookieName, unlockToken } from "@/lib/site-lock";
 
 // Runs before every page and route. It locks the site when SITE_PASSWORD is
 // set and tells search engines to stay away unless indexing is allowed.
 
-const OPEN_PATHS = new Set(["/unlock", "/unlock/submit", "/robots.txt", "/favicon.ico", "/manifest.webmanifest"]);
+const OPEN_PATHS = new Set(["/unlock", "/unlock/submit", "/robots.txt", "/sitemap.xml", "/favicon.ico", "/manifest.webmanifest"]);
 const ICON_PATH = /^\/(apple-)?icon\d*(\.\w+)?$/;
 
 function isOpen(pathname: string): boolean {
@@ -25,6 +26,10 @@ function withRobots(response: NextResponse): NextResponse {
 export async function proxy(request: NextRequest) {
   const password = sitePassword();
   const { pathname, search } = request.nextUrl;
+  if (pathname === ACCOUNT_MAINTENANCE_PATH && request.method === "POST"
+    && !request.headers.has("next-action") && authorisedMaintenance(request.headers.get("authorization"))) {
+    return withRobots(NextResponse.next());
+  }
   const locked = password ? !(await isUnlocked(request, password)) : false;
   // Server actions can be posted to any path, the open ones included, with or
   // without a Next-Action header (plain forms carry the action in the body).

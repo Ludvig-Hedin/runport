@@ -1,0 +1,24 @@
+@layer components {
+  .rp-public-form textarea.rp-input {
+    padding-block: 14px;
+    height: auto;
+    min-height: 132px;
+    resize: vertical;
+  }
+
+  .rp-public-form-pending {
+    color: var(--rp-muted);
+    padding: 12px 14px;
+    font-size: 14px;
+  }
+
+  .rp-public-form-status:has(.rp-alert),
+  .rp-public-form-status:has(.rp-notice),
+  .rp-public-form-status:has(.rp-public-form-pending) {
+    display: block;
+  }
+
+  .rp-public-form-status {
+    display: contents;
+  }
+}

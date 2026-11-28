@@ -1,5 +1,6 @@
 @import "tailwindcss";
 @import "../components/auth/auth.css";
+@import "../components/forms/forms.css";
 @import "../components/consent/consent.css";
 
 :root {

@@ -2,24 +2,28 @@
 // online Runport, then a Railway project for the app itself.
 // Run: PLATFORM_KEYCHAIN_SERVICE=runport-prod PLATFORM_APPWRITE_ENDPOINT=https://<runport>/v1 bun src/deploy-app.ts <slug>
 // Safe to rerun: each step checks what exists first.
-import { homedir } from "node:os";
 import { join } from "node:path";
 import { AppwriteAdmin } from "./appwrite-admin";
 import { config } from "./config";
+import { accountMaintenanceKey, registerAppAlerts, webService, type RailwayProject } from "./deploy-app-alerts";
+import { formMailSettings } from "./form-mail";
 import { readSecret } from "./keychain";
-import { loadRegistry } from "./registry";
+import { railwayApi } from "./railway-api";
+import { loadRegistry, upsertApp } from "./registry";
 import { assertAppwriteId } from "./slug";
+import { provisionAppAnalytics } from "./analytics-integration";
 
 const slug = assertAppwriteId(process.argv[2] ?? "");
 const app = (await loadRegistry()).apps.find((a) => a.slug === slug);
 if (!app) throw new Error(`No app called "${slug}" in ${config.appsDir}.`);
+if (app.setupPending) throw new Error(`App "${slug}" has unfinished setup. Retry create_app before deploying it.`);
 const admin = new AppwriteAdmin();
 
 /** Runs the Railway CLI in the app folder. Output is returned, never printed, as it can hold keys. */
-async function railway(args: string[], input?: string): Promise<string> {
+async function railway(args: string[], input?: string, silentError = false): Promise<string> {
   const proc = Bun.spawn(["railway", ...args], { cwd: app!.folder, stdin: input ? new Blob([input]) : "ignore", stdout: "pipe", stderr: "pipe" });
   const [out, err, code] = await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text(), proc.exited]);
-  if (code !== 0) throw new Error(`railway ${args[0]} failed: ${err.trim() || out.trim()}`);
+  if (code !== 0) throw new Error(silentError ? `railway ${args[0]} failed (exit ${code})` : `railway ${args[0]} failed: ${err.trim() || out.trim()}`);
   return out;
 }
 
@@ -28,24 +32,12 @@ async function railway(args: string[], input?: string): Promise<string> {
  * few seconds. The CLI has no flag for this, so it goes through Railway's API
  * with the CLI's own login. Takes effect from the deploy below.
  */
-async function sleepWhenIdle(): Promise<void> {
-  type Status = { environments: { edges: { node: { id: string; name: string } }[] }; services: { edges: { node: { id: string; name: string } }[] } };
-  const status = JSON.parse(await railway(["status", "--json"])) as Status;
-  const environmentId = status.environments.edges.find((e) => e.node.name === "production")?.node.id;
-  const serviceId = status.services.edges.find((s) => s.node.name === "web")?.node.id;
-  const login = JSON.parse(await Bun.file(join(homedir(), ".railway", "config.json")).text()) as { user?: { accessToken?: string; token?: string } };
-  const token = process.env.RAILWAY_API_TOKEN ?? login.user?.accessToken ?? login.user?.token;
-  if (!environmentId || !serviceId || !token) throw new Error("Could not find the Railway service or login to turn on sleeping.");
-  const res = await fetch("https://backboard.railway.com/graphql/v2", {
-    method: "POST",
-    headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
-    body: JSON.stringify({
-      query: "mutation($s: String!, $e: String!) { serviceInstanceUpdate(serviceId: $s, environmentId: $e, input: { sleepApplication: true }) }",
-      variables: { s: serviceId, e: environmentId },
-    }),
-  });
-  const body = (await res.json()) as { errors?: { message: string }[] };
-  if (!res.ok || body.errors) throw new Error(`Railway refused to turn on sleeping: ${body.errors?.map((e) => e.message).join("; ") ?? res.status}`);
+async function sleepWhenIdle(project: RailwayProject): Promise<void> {
+  const { environmentId, serviceId } = webService(project);
+  await railwayApi(
+    "mutation($s: String!, $e: String!) { serviceInstanceUpdate(serviceId: $s, environmentId: $e, input: { sleepApplication: true }) }",
+    { s: serviceId, e: environmentId },
+  );
 }
 
 // 1. Railway project and service with a public domain.
@@ -61,25 +53,26 @@ if (linked && linked.name !== `${slug}-app`) {
 if (!linked) await railway(["init", "--name", `${slug}-app`, "--json"]);
 const services = JSON.parse(await railway(["status", "--json"])).services.edges as { node: { name: string } }[];
 if (!services.some((s) => s.node.name === "web")) await railway(["add", "--service", "web"]);
-await sleepWhenIdle();
-const domainOut = JSON.parse(await railway(["domain", "--service", "web", "--json"])) as { domain?: string; domains?: string[] };
+const project = JSON.parse(await railway(["status", "--json"])) as RailwayProject;
+await sleepWhenIdle(project);
+const domainOut = JSON.parse(await railway(["domain", "--service", "web", "--environment", "production", "--json"])) as { domain?: string; domains?: string[] };
 const domain = new URL(domainOut.domain ?? domainOut.domains?.[0] ?? "").host;
 console.log(`app address: https://${domain}`);
 
 // 2. Appwrite project on the online Runport.
 if (!(await admin.getProject(slug))) await admin.createProject(slug, app.name);
 await admin.addWebPlatform(slug, domain);
-const masterKey = await readSecret("mail-gateway-master-key");
+const masterKey = await readSecret("mail-master-key");
 await admin.setProjectSmtp(slug, {
   senderName: app.name,
   senderEmail: `${slug}@${config.mailDomain}`,
   host: "mail-gateway.railway.internal",
   port: 2525,
-  username: slug,
-  password: new Bun.CryptoHasher("sha256", masterKey).update(`mail-gateway:${slug}`).digest("hex"),
+  username: `${slug}:login`,
+  password: new Bun.CryptoHasher("sha256", masterKey).update(`mail-gateway-login:${slug}`).digest("hex"),
 });
 // Reuse the key already stored on Railway, so reruns do not pile up keys.
-const current = JSON.parse(await railway(["variables", "--service", "web", "--json"])) as Record<string, string>;
+const current = JSON.parse(await railway(["variables", "--service", "web", "--environment", "production", "--json"], undefined, true)) as Record<string, string>;
 const key = current.APPWRITE_PROJECT_ID === slug && current.APPWRITE_API_KEY
   ? current.APPWRITE_API_KEY
   : (await admin.createServerKey(slug, `${slug}-online`)).secret;
@@ -93,7 +86,31 @@ console.log("tables ready");
 
 // 4. App settings on Railway, then deploy the folder.
 // Telemetry off, so an idle app sends nothing out and Railway can put it to sleep.
-const vars = { APPWRITE_ENDPOINT: config.endpoint, APPWRITE_PROJECT_ID: slug, APPWRITE_API_KEY: key, APP_URL: `https://${domain}`, PORT: String(app.port), NEXT_TELEMETRY_DISABLED: "1" };
-await railway(["variables", "--service", "web", "--skip-deploys", ...Object.entries(vars).flatMap(([k, v]) => ["--set", `${k}=${v}`])]);
-await railway(["up", join(app.folder), "--path-as-root", "--service", "web", "--detach"]);
+const mailUrl = process.env.PLATFORM_FORM_MAIL_URL ?? new URL("/runport-mail/form", config.endpoint).href;
+const { RUNPORT_FORM_MAIL_TOKEN, ...formMail } = await formMailSettings(slug, mailUrl, current.RUNPORT_FORM_OWNER_EMAIL, masterKey);
+const analytics = await provisionAppAnalytics(app.folder, slug, domain);
+const { ANALYTICS_INGEST_TOKEN: ingestToken, ...analyticsPublicVars } = analytics.variables;
+const vars = { ...formMail, APPWRITE_ENDPOINT: config.endpoint, APPWRITE_PROJECT_ID: slug, APP_URL: `https://${domain}`, PORT: String(app.port), NEXT_TELEMETRY_DISABLED: "1", ...analyticsPublicVars };
+const accountMaintenance = await Bun.file(join(app.folder, "app", "api", "runport", "account-maintenance", "route.ts")).exists();
+const alertVars = await registerAppAlerts(slug, { ...project, accountMaintenance: accountMaintenance || undefined }, domain);
+await upsertApp({ ...app, alerts: alertVars.registration });
+const variableTarget = ["--service", "web", "--environment", "production", "--skip-deploys"];
+await railway(["variables", ...variableTarget, ...Object.entries({ ...vars, RUNPORT_ERROR_URL: alertVars.RUNPORT_ERROR_URL })
+  .flatMap(([k, v]) => ["--set", `${k}=${v}`])], undefined, true);
+for (const [name, value] of Object.entries({
+  APPWRITE_API_KEY: key,
+  RUNPORT_FORM_MAIL_TOKEN,
+  RUNPORT_ERROR_TOKEN: alertVars.RUNPORT_ERROR_TOKEN,
+  ...(accountMaintenance ? {
+    RUNPORT_ACCOUNT_MAINTENANCE_KEY: accountMaintenanceKey(masterKey, slug, project, domain),
+  } : {}),
+})) {
+  await railway(["variable", "set", ...variableTarget, "--stdin", name], value, true);
+}
+if (ingestToken) {
+  await railway(["variable", "set", ...variableTarget, "--stdin", "ANALYTICS_INGEST_TOKEN"], ingestToken, true)
+    .catch(() => { throw new Error("Could not set the server-only analytics credential on Railway."); });
+}
+console.log(analytics.note);
+await railway(["up", join(app.folder), "--path-as-root", "--service", "web", "--environment", "production", "--detach"]);
 console.log("deploy started");

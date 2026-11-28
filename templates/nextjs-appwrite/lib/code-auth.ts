@@ -2,7 +2,7 @@
 
 import { redirect } from "next/navigation";
 import { AppwriteException, ID } from "node-appwrite";
-import { createAdminClient } from "./appwrite";
+import { createAdminClient, createAuthClient } from "./appwrite";
 import { INVALID_EMAIL, TOO_MANY_ATTEMPTS, friendlyError, isEmail } from "./auth-errors";
 import {
   clearCodeAttempts,
@@ -14,6 +14,7 @@ import {
 import { allowed } from "./rate-limit";
 import { setSessionCookie } from "./session";
 import { routes } from "@/runport.config";
+import { isReservedAccountEmail } from "./account-deletion";
 
 // Sign-in with a one-time code by email. The same flow creates new accounts.
 
@@ -23,7 +24,7 @@ const WRONG_CODE = "That code is not right. Check the email and try again.";
 const EXPIRED_CODE = "This code has expired. Send a new code.";
 
 async function sendCode(email: string): Promise<CodeState> {
-  if (!isEmail(email)) return { step: "email", email, error: INVALID_EMAIL };
+  if (!isEmail(email) || isReservedAccountEmail(email)) return { step: "email", email, error: INVALID_EMAIL };
   if (!(await allowed("sendCode", email))) return { step: "email", email, error: TOO_MANY_ATTEMPTS };
   try {
     const { account } = createAdminClient();
@@ -52,7 +53,7 @@ async function verifyCode(input: string): Promise<CodeState> {
   if (Date.now() > pending.expire) return { ...state, error: EXPIRED_CODE };
   if (!takeCodeAttempt(pending.userId)) return { ...state, error: TOO_MANY_ATTEMPTS };
   try {
-    const { account } = createAdminClient();
+    const { account } = await createAuthClient();
     await setSessionCookie(await account.createSession({ userId: pending.userId, secret: code }));
   } catch (error) {
     // Appwrite answers the same for a wrong and an expired code.

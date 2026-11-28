@@ -1,6 +1,6 @@
 import "server-only";
-import { cookies } from "next/headers";
-import { Account, Client, TablesDB } from "node-appwrite";
+import { cookies, headers } from "next/headers";
+import { Account, Client, TablesDB, Users } from "node-appwrite";
 
 // Every Appwrite call runs on the server. The browser only ever sees this
 // app's own cookie, so login keeps working when Appwrite lives on another host.
@@ -33,7 +33,20 @@ export function createAdminClient() {
   return {
     account: new Account(client),
     tables: new TablesDB(client),
+    users: new Users(client),
   };
+}
+
+/**
+ * The admin client for creating sessions. It passes on the visitor's browser,
+ * so the account page can list devices by browser instead of "Node.js".
+ */
+export async function createAuthClient() {
+  const admin = createAdminClient();
+  const agent = (await headers()).get("user-agent");
+  if (!agent) return admin;
+  const client = baseClient().setKey(config.apiKey()).setForwardedUserAgent(agent);
+  return { ...admin, account: new Account(client) };
 }
 
 /** Acts as the signed-in user, so row permissions apply. Throws when signed out. */
