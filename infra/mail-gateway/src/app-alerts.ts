@@ -316,10 +316,9 @@ export function createAppAlerts({ path, master, owner, limits, deliver, log, clo
   }
 
   let flushing: Promise<void> | undefined;
-  async function flush() {
+  async function flush(deadline: number) {
     const now = clock();
     const today = stockholmDay(new Date(now));
-    const deadline = Date.now() + 35_000;
     const eligible = db.query<Alert & Registration, [number, string, number]>(`
       SELECT alerts.id, alerts.registrationId, apps.slug, apps.projectId, apps.environmentId, apps.serviceId, apps.domain,
         alerts.detail, alerts.happened, alerts.count, alerts.category, alerts.failures
@@ -343,6 +342,10 @@ export function createAppAlerts({ path, master, owner, limits, deliver, log, clo
     }
   }
 
+  function flushQueued(deadline: number) {
+    return flushing ??= flush(deadline).finally(() => { flushing = undefined; });
+  }
+
   return async (request: Request): Promise<Response> => {
     const path = new URL(request.url).pathname;
     if (path === "/internal/app-alerts") {
@@ -360,10 +363,8 @@ export function createAppAlerts({ path, master, owner, limits, deliver, log, clo
       if (request.method !== "POST") return status(405);
       const input = await boundedJson(request, 16_000).catch(() => undefined);
       if (!record(input)) return status(400);
-      let processed = 0;
-      if (input.processRailwayEvents === true) {
-        processed = await webhooks.process(now, observe);
-      } else {
+      const processRailwayEvents = input.processRailwayEvents === true;
+      if (!processRailwayEvents) {
         if (!Array.isArray(input.observations) || input.observations.length > 20 || !input.observations.every(observation)) return status(400);
         const wait = input.retryAfterMs ?? 0;
         if (typeof wait !== "number" || !Number.isSafeInteger(wait) || wait < 0 || wait > 30 * dayMs) return status(400);
@@ -378,8 +379,13 @@ export function createAppAlerts({ path, master, owner, limits, deliver, log, clo
           OR (state = 'pending' AND happened < ?)
       `).run(now - 30 * dayMs, now - 14 * dayMs, now - 7 * dayMs);
       db.query("DELETE FROM traffic WHERE minute < ?").run(Math.floor(now / 60_000) - 60);
-      if (!flushing) flushing = flush().finally(() => { flushing = undefined; });
-      await flushing;
+      const deadline = Date.now() + 35_000;
+      const [processed] = await Promise.all([
+        processRailwayEvents ? webhooks.process(now, observe) : 0,
+        flushQueued(deadline),
+      ]);
+      // The first flush can finish before probes enqueue their alerts.
+      if (processed) await flushQueued(deadline);
       const failed = db.query<{ count: number }, []>(`
         SELECT COUNT(*) AS count FROM alerts JOIN apps USING (registrationId)
         WHERE alerts.state IN ('failed', 'refused')

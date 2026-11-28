@@ -82,6 +82,55 @@ const generation = async (response: Response) => {
 };
 const grace = 60_000;
 
+test("removing a failed candidate preserves its pending outage check", async () => {
+  let healthy = true;
+  let failedProbes = 0;
+  const f = fixture({ probe: async () => {
+    if (!healthy) failedProbes++;
+    return healthy;
+  } });
+  const id = await generation(await f.register());
+  const path = "/_runport/alerts/railway/" + slug;
+  const b = "00000000-0000-0000-0000-000000000009";
+  const push = (type: string, deploymentId: string) =>
+    f.request(path, railwayKey(id), railwayEvent(type, f.clock(), deploymentId));
+  await push("Deployment.deployed", railwayDeploymentId);
+  await f.maintenance();
+  healthy = false;
+  f.tick(1000);
+  await push("Deployment.failed", b);
+  f.tick(1000);
+  await push("Deployment.removed", b);
+  await f.maintenance();
+  expect(failedProbes).toBe(1);
+  expect(f.inbox).toHaveLength(0);
+  f.tick(grace);
+  await f.maintenance();
+  expect(failedProbes).toBe(2);
+  expect(f.inbox.map(({ to }) => to)).toEqual([[owner]]);
+});
+
+test("queued owner mail drains while a Railway probe is still in flight", async () => {
+  const started = Promise.withResolvers<void>();
+  const probe = Promise.withResolvers<boolean>();
+  const f = fixture({ probe: () => {
+    started.resolve();
+    return probe.promise;
+  } });
+  const id = await generation(await f.register());
+  await f.report();
+  await f.request("/_runport/alerts/railway/" + slug, railwayKey(id), railwayEvent("Deployment.deployed", f.clock()));
+  const running = f.maintenance();
+  try {
+    await started.promise;
+    expect(f.inbox.map(({ to }) => to)).toEqual([[owner]]);
+  } finally {
+    probe.resolve(true);
+    await running;
+  }
+  expect(f.inbox).toHaveLength(1);
+});
+
 test.each(["maintenance", "alerts"] as const)("an alert-only update preserves enrolment when %s rolls out first", async (first) => {
   const directory = await mkdtemp(join(tmpdir(), "runport-registrations-"));
   const path = join(directory, "alerts.sqlite");
